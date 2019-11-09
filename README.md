@@ -1,7 +1,8 @@
 # Winsock-Multi-Client-Server  
 ###### tags: `C++` `Winsock` `Multi-Client Server`  
 ![](https://img.shields.io/github/license/orenccl/Winsock-Multi-Client-Server)  
-  
+
+## The Plan  
 Learn how to careat a Winsock-Multi-Client-Server, and record how I learn it.  
 
 ## Why using C++?  
@@ -76,10 +77,7 @@ Platform : Window x64
 * Less OOP ( Object-Oriented Design )  
 * More Component-Based, Data-Oriented Design  
 
-## The Plan
-Create multi-threading select server, and apply it on Unity.
-
-## Future Plan
-* Decentralized-Server framework
-* Concurrency and Parallelism
-* WindorAPI IOCP
+## Future Plan  
+* Decentralized-Server framework  
+* Concurrency and Parallelism  
+* WindorAPI IOCP  
