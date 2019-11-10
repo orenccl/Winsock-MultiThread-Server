@@ -1,5 +1,5 @@
 workspace "MintServer"
-	architecture "x32"
+	architecture "x86"
 	startproject "MintServer"
 
 	configurations
