@@ -24,4 +24,9 @@
 #define LENGTH_2048   2048
 #define LENGTH_4096   4096
 #define LENGTH_8192   8192
+
+constexpr int KB = 1024;
+constexpr int MB = 1024*1024;
+
+constexpr int MILLI_SECOND = 1000;
 /*! @} */

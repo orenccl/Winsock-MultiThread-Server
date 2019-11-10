@@ -1,7 +1,6 @@
 #pragma once
-#define FD_SETSIZE     1000 // socket max
-
-#include "MTLibrary/List/TMPDoublyList.hpp"
+#include <winsock2.h>
+#include <windows.h>
 
 #define SERVER_PORT   27015
 
@@ -15,7 +14,7 @@ class TCPServer
 {
 protected :
 	SOCKET  ListenSocket;
-	TMPDoublyList< SocketContext > ClientList;
+	SocketContext Client;
 	bool    CreateSucceedFlag;
 	bool    RunFlag;
 
@@ -25,7 +24,7 @@ protected :
 	bool CreateWinsock( WORD port );
 	void Select();
 	void Accept();
-	bool Receive( SocketContext* node );
+	bool Receive();
 	void CloseSocket( SOCKET &socket );
 	void ShutdownAndCloseSocket();
 	void Release();
