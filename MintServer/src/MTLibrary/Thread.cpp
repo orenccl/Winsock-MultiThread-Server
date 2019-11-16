@@ -47,12 +47,12 @@ void CThread::ReleaseWait()
 	}
 }
 
-CThreadEx::CThreadEx()
+CAcceptThread::CAcceptThread()
 {
-	SwitchFlag = false;
+	SelectTimeModeFlag = false;
 }
 
-void CThreadEx::SetSwitchFlag(bool flag)
+void CAcceptThread::SetSelectTimeModeFlag(bool flag)
 {
-	::InterlockedExchange(&SwitchFlag, flag);
+	::InterlockedExchange(&SelectTimeModeFlag, flag);
 }

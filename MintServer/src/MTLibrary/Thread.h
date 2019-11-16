@@ -13,12 +13,12 @@ public :
 	void  ReleaseWait();
 };
 
-class CThreadEx : public CThread
+class CAcceptThread : public CThread
 {
-	volatile LONG SwitchFlag;
+	volatile LONG SelectTimeModeFlag;
 public:
-	CThreadEx();
+	CAcceptThread();
 
-	void SetSwitchFlag(bool flag);
-	inline LONG GetSwitchFlag() { return SwitchFlag; }
+	void SetSelectTimeModeFlag(bool flag);
+	inline bool GetSelectTimeModeFlag() { return SelectTimeModeFlag; }
 };

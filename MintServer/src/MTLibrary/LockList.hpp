@@ -102,8 +102,8 @@ public:
 	inline void LockUnlinkFreeNode(TDNode< DATA_TYPE >*& node)
 	{
 		Locker.Lock();
-		TMPSinglyList< DATA_TYPE >::Unlink(node);
-		TMPSinglyList< DATA_TYPE >::FreeNode(node);
+		TMPDoublyList< DATA_TYPE >::Unlink(node);
+		TMPDoublyList< DATA_TYPE >::FreeNode(node);
 		Locker.Unlock();
 	}
 };

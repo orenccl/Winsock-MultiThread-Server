@@ -9,5 +9,5 @@ public :
 	void Create();
 	void Release();
 	void Wait();
-	void Start();
+	void Awake();
 };

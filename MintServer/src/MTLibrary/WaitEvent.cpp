@@ -38,7 +38,7 @@ void WaitEvent::Wait()
 	::ResetEvent(WaitHandle); // end event - Clear last event signal
 }
 
-void WaitEvent::Start()
+void WaitEvent::Awake()
 {
 	::SetEvent( WaitHandle ); // start event - SerEvent signal! object can jump out of block state.
 }

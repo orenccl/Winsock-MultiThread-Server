@@ -7,6 +7,8 @@
 #include <ws2tcpip.h>
 #include <windows.h>
 
+//#pragma comment( lib, "WS2_32.lib" )
+
 /*! Standard Library */
 #include <stdio.h>
 

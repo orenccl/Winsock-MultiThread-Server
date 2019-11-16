@@ -4,13 +4,10 @@
 
 #pragma comment( lib, "WS2_32.lib" ) // winsock2.h
 
-TCPServer::TCPServer()
-{
-	::memset(this, 0, sizeof(TCPServer)); // Initial entire TCPServer to zero.
-}
-
 bool TCPServer::Create(WORD port)
 {
+	Logger::Create();
+
 	const UINT memory_pool_bytes_max = 100 * MB;
 	MainMemoryPool::sMemoryPoolCreate(memory_pool_bytes_max);
 
@@ -19,10 +16,11 @@ bool TCPServer::Create(WORD port)
 
 	// Distribute memory to every List.
 	AcceptList.Create(ACCEPT_LIST_MAX);
+	SocketRecvList.Create(CONNECTION_MAX);
+	SocketSendList.Create(CONNECTION_MAX);
+	PacketRecvList.Create(RECEIVE_LIST_MAX);
+	PacketSendList.Create(SEND_LIST_MAX);
 	ClientList.Create(CONNECTION_MAX);
-	SocketList.Create(CONNECTION_MAX);
-	ReceiveList.Create(RECEIVE_LIST_MAX);
-	SendList.Create(SEND_LIST_MAX);
 
 	CreateSucceedFlag = true;
 	RunFlag = true;
@@ -102,11 +100,22 @@ bool TCPServer::CreateWinsock(WORD port)
 	return true;
 }
 
-void TCPServer::MainRun()
+void TCPServer::SetTCPNoDelay(SOCKET socket)
+{
+	// Turn off Nagle's Alogorithm ( Speed up transmition )
+	const char optval_enable = 1;
+	int ret = ::setsockopt(socket, IPPROTO_TCP, TCP_NODELAY, &optval_enable, sizeof(optval_enable));
+	if (ret == -1)
+	{
+		Logger::Log("setsockopt( TCP_NODELAY ) failed, error: %d", ::WSAGetLastError());
+	}
+}
+
+void TCPServer::MainRun() // main thread - ¥D°õ¦æºü
 {
 	if (CreateSucceedFlag)
 	{
-		Select_InMainThread(); // Deal with select - accept, recv.
+		Select_InMainThread(); // Incharge select - accept and recv event.
 	}
 }
 
@@ -148,22 +157,12 @@ void TCPServer::Select_InMainThread()
 	timeval timeout = { 0, milliseconds };
 	int result = 0;
 
-	TSNode< SocketInfo >* accept_node = NULL;
-	TDNode< SocketContext >* client_node = NULL, * del_client_node = NULL;
+	SOCKET_NODE* socket_node = NULL, * del_socket_node = NULL;
 
 	Logger::Log("TCP server - select mode - multi-threading");
 
 	while (RunFlag)
 	{
-		while (AcceptList.NodeLinkCount)
-		{
-			accept_node = AcceptList.LockGetHeadNode();
-
-			CreateClientNode(accept_node); // Initial client data
-
-			AcceptList.LockUnlinkFreeNode(accept_node);
-		}
-
 		// Clear fds_read array
 		FD_ZERO(&fds_read);
 
@@ -171,51 +170,52 @@ void TCPServer::Select_InMainThread()
 		FD_SET(ListenSocket, &fds_read);
 
 		// Put client socket into fds_read array
-		client_node = ClientList.pHeadNode;
-		while (client_node)
+		socket_node = SocketRecvList.pHeadNode;
+		while (socket_node)
 		{
-			FD_SET(client_node->Socket, &fds_read);
-			client_node = client_node->pNext;
+			FD_SET(socket_node->Socket, &fds_read);
+			socket_node = socket_node->pNext;
 		}
 
 		// select will wait until recv event occur
 		// timeout time is the period program return from select function
-		if (AcceptThread.GetSwitchFlag())
+		if (AcceptThread.GetSelectTimeModeFlag())
+		{
+			AcceptListCreateClientNode();
 			result = ::select(0, &fds_read, NULL, NULL, &timeout); // When happen accept event, select go into timer mode, until CreateClientNode finish.
+		}
 		else
 			result = ::select(0, &fds_read, NULL, NULL, NULL);     // If nothing to do, blocking.
 
 		if (result == SOCKET_ERROR)
 		{
-			RunFlag = false;
-			AcceptThread.Start();
 			Logger::Log("select failed, error: %d", ::WSAGetLastError());
-			break;
 		}
 
 		if (FD_ISSET(ListenSocket, &fds_read))    // Check if new connect event occur
 		{
 			::printf("select_wait... ");
-			AcceptThread.SetSwitchFlag(true);     // Activate select timer mode, deal with accept event
-			AcceptThread.Start();                 // Wake up sAcceptThreadProc
+			AcceptThread.SetSelectTimeModeFlag(true);     // Activate select timer mode, deal with accept event
+			AcceptThread.Awake();                 // Wake up sAcceptThreadProc
 		}
 
-		client_node = ClientList.pHeadNode;
-		while (client_node)
+		socket_node = SocketRecvList.pHeadNode;
+		while (socket_node)
 		{
-			if (FD_ISSET(client_node->Socket, &fds_read)) // Check if receive event occur.
+			if (FD_ISSET(socket_node->Socket, &fds_read)) // Check if receive event occur.
 			{
-				if (Receive(client_node) == false)
+				if (ReceiveEx(socket_node->Socket) == false)
 				{
-					del_client_node = client_node;
-					client_node = client_node->pNext;
-					FreeClientNode(del_client_node);
+					del_socket_node = socket_node;
+					socket_node = socket_node->pNext;
+					RecvFreeClientNode(del_socket_node);
 					continue;
 				}
 			}
-			client_node = client_node->pNext;
+			socket_node = socket_node->pNext;
 		}
 	}
+	Logger::Log("Select_InMainThread END.");
 }
 
 void TCPServer::Accept_InThread()
@@ -238,12 +238,14 @@ void TCPServer::Accept_InThread()
 				error = ::WSAGetLastError();
 				if (error == WSAEWOULDBLOCK) // 10035 = No new connect request.
 				{
-					AcceptThread.SetSwitchFlag(false); // Set select into block mode
-					break;
+					if (AcceptList.LockGetHeadNode() == NULL)	   // All AcceptList are finished.
+					{
+						AcceptThread.SetSelectTimeModeFlag(false); // Set select into block mode
+						break; // End accept polling
+					}
+					::Sleep(1);
+					continue;
 				}
-				// Unexpected error, turn down server.
-				RunFlag = false;
-				CloseSocket(ListenSocket); // Trun off ListenSocket, and wake up select.
 				Logger::Log("accept failed, error: %d", error);
 				break;
 			}
@@ -256,7 +258,7 @@ void TCPServer::Accept_InThread()
 			}
 
 			// Put new connection in to AcceptList
-			TSNode< SocketInfo >* node = AcceptList.LockGetNode();
+			SOCKET_NODE* node = AcceptList.LockGetNode();
 			node->Socket = socket;
 			::inet_ntop(AF_INET, &client_addr.sin_addr, node->IP, LENGTH_16); // Turn client address into IP string.
 			AcceptList.LockLink(node);
@@ -266,172 +268,459 @@ void TCPServer::Accept_InThread()
 	}
 
 	AcceptThread.Release();
+	Logger::Log("Accept_InThread END.");
 }
 
-void TCPServer::CreateClientNode(TSNode< SocketInfo >* accept_node)
+void TCPServer::AcceptListCreateClientNode()
 {
-	TDNode< SocketContext >* client_node = ClientList.GetNode();
-	client_node->Socket = accept_node->Socket;
-	Tool::sMemcpy(client_node->IP, LENGTH_16, accept_node->IP, LENGTH_16);
-	ClientList.Link(client_node);
+	SOCKET_NODE* accept_node = NULL;
 
-	SocketList.Locker.Lock();   // lock
-	TDNode< SocketInfo >* socket_node = SocketList.GetNode();
-	socket_node->Socket = accept_node->Socket;
-	Tool::sMemcpy(socket_node->IP, LENGTH_16, accept_node->IP, LENGTH_16);
-	SocketList.Link(socket_node);
-	SocketList.Locker.Unlock(); // unlock
+	while (AcceptList.NodeLinkCount)
+	{
+		accept_node = AcceptList.LockGetHeadNode();
+
+		SOCKET_NODE* socket_node = SocketRecvList.GetNode();
+		socket_node->Socket = accept_node->Socket;
+		Tool::sMemcpy(socket_node->IP, LENGTH_16, accept_node->IP, LENGTH_16);
+		SocketRecvList.Link(socket_node);
+
+		socket_node = SocketSendList.LockGetNode();
+		socket_node->Socket = accept_node->Socket;
+		Tool::sMemcpy(socket_node->IP, LENGTH_16, accept_node->IP, LENGTH_16);
+		SocketSendList.LockLink(socket_node);
+
+		NoticeGameplayThreadCreateClientNode(accept_node);
+
+		AcceptList.LockUnlinkFreeNode(accept_node);
+	}
 }
 
-void TCPServer::FreeClientNode(TDNode< SocketContext >*& client_node)
+void TCPServer::RecvFreeClientNode(SOCKET_NODE*& del_socket_node)
 {
-	SocketList.Locker.Lock();   // lock
-	TDNode< SocketInfo >* socket_node = SocketList.pHeadNode, * del_socket_node = NULL;
+	SOCKET socket = del_socket_node->Socket;
+
+	SocketRecvList.Unlink(del_socket_node);
+	SocketRecvList.FreeNode(del_socket_node);
+
+	//---------------------------------------
+
+	// ±qSocketSendList¥h·j´M»Ý­n§R°£ªºsocket...
+	SocketSendList.Locker.Lock();   // lock
+	SOCKET_NODE* socket_node = SocketSendList.pHeadNode, * del_node = NULL;
 	while (socket_node)
 	{
-		if (socket_node->Socket == client_node->Socket)
+		if (socket_node->Socket == socket)
 		{
-			del_socket_node = socket_node;
+			del_node = socket_node;
 			break;
 		}
 		socket_node = socket_node->pNext;
 	}
-	if (del_socket_node)
+	if (del_node)
 	{
-		SocketList.Unlink(del_socket_node);
-		SocketList.FreeNode(del_socket_node);
-	}
-	SocketList.Locker.Unlock(); // unlock
-
-	// Release client socket
-	CloseSocket(client_node->Socket);
-
-	ClientList.Unlink(client_node);
-	ClientList.FreeNode(client_node);
-}
-
-bool TCPServer::Receive(SocketContext* node)
-{
-	TSNode< RecvPacketInfo >* packet_node = ReceiveList.LockGetNode();
-
-	int recv_length = ::recv(node->Socket, packet_node->Packet, PACKET_BUFFER_MAX, 0);
-	if (recv_length > 0)
-	{
-		PacketInfo* packet = (PacketInfo*)packet_node->Packet;
-		Logger::Log("socket= %d, bytes recv_length= %d, [%d] %s¡G%s", node->Socket, recv_length, packet->Number, packet->Name, packet->Message);
-		packet_node->PacketLength = recv_length;
-		packet_node->Socket = node->Socket;
-		ReceiveList.LockLink(packet_node);
-		GameplayThread.Start(); // Wake up GameplayThreadProc
-		return true;
-	}
-	ReceiveList.LockFreeNode(packet_node);
-
-	if (recv_length == 0)
-	{
-		Logger::Log("client connection closed, socket= %d", node->Socket);
+		SocketSendList.Unlink(del_node);
+		SocketSendList.FreeNode(del_node);
 	}
 	else
 	{
-		int error = ::WSAGetLastError();
-		Logger::Log("recv failed, socket= %d, error: %d", node->Socket, error);
+		D_WARNING();
 	}
-	return false;
+	SocketSendList.Locker.Unlock(); // unlock
+
+	//---------------------------------------
+
+	NoticeGameplayThreadFreeClientNode(socket);
+}
+
+void TCPServer::CreateClientNode(RECV_PACKET_NODE* packet_node)
+{
+	SOCKET_CLIENT_NODE* client_node = ClientList.GetNode();
+	client_node->Socket = packet_node->Socket;
+	Tool::sMemcpy(client_node->IP, LENGTH_16, packet_node->Packet, LENGTH_16);
+	ClientList.Link(client_node);
+
+	vUserCreateClientNode(client_node);
+
+	SetTCPNoDelay(client_node->Socket);
+}
+
+void TCPServer::FreeClientNode(RECV_PACKET_NODE* packet_node)
+{
+	SOCKET_CLIENT_NODE* client_node = ClientList.pHeadNode, * del_client_node = NULL;
+	while (client_node)
+	{
+		if (client_node->Socket == packet_node->Socket)
+		{
+			del_client_node = client_node;
+			break;
+		}
+		client_node = client_node->pNext;
+	}
+
+	D_CHECK(del_client_node);
+
+	vUserFreeClientNode(del_client_node);
+
+	if (del_client_node->AliveTimeoutFlag == false)
+	{
+		CloseSocket(del_client_node->Socket); // Close client socket
+	}
+
+	ClientList.Unlink(del_client_node);
+	ClientList.FreeNode(del_client_node);
+
+	::InterlockedExchange(&SocketSendCache.SocketTableUseCount, 0);
+}
+
+void TCPServer::NoticeGameplayThreadCreateClientNode(SOCKET_NODE* accept_node)
+{
+	RECV_PACKET_NODE* node = PacketRecvList.LockGetNode();
+	node->ActionType = ACTION__CREATE_CLIENT;
+	node->Socket = accept_node->Socket;
+	Tool::sMemcpy(node->Packet, PACKET_BUFFER_MAX, accept_node->IP, LENGTH_16);
+	PacketRecvList.LockLink(node);
+
+	GameplayThread.Awake(); // Awake GameplayThreadProc
+}
+
+void TCPServer::NoticeGameplayThreadFreeClientNode(SOCKET socket)
+{
+	RECV_PACKET_NODE* node = PacketRecvList.LockGetNode();
+	node->ActionType = ACTION__RELEASE_CLIENT;
+	node->Socket = socket;
+	PacketRecvList.LockLink(node);
+
+	GameplayThread.Awake(); // Awake GameplayThreadProc
+}
+
+bool TCPServer::ReceiveEx(SOCKET socket)
+{
+	int  recv_packet_max = PACKET_LENGTH_SIZE;
+	int  recv_length = 0;
+	int  buff_packet_index = 0;
+
+	int  recv_retry_count = 0;
+	const int recv_retry_max = 5000;
+
+	RECV_PACKET_NODE* packet_node = PacketRecvList.LockGetNode();
+
+	while (recv_packet_max > 0)
+	{
+		recv_length = ::recv(socket, &packet_node->Packet[buff_packet_index], recv_packet_max, 0);
+		if (recv_length > 0)
+		{
+			recv_packet_max -= recv_length;
+			buff_packet_index += recv_length;
+		}
+		else if (recv_length == 0)
+		{
+			Logger::Log("RecvEx #1 recv notice, client connection closed, socket= %d", socket);
+			PacketRecvList.LockFreeNode(packet_node);
+			return false;
+		}
+		else
+		{
+			int error = ::WSAGetLastError();
+			if (error == WSAEWOULDBLOCK) // 10035 - recv buffer has no more package
+			{
+				if (++recv_retry_count < recv_retry_max)
+				{
+					::Sleep(1);
+					continue;
+				}
+				Logger::Log("RecvEx #1 recv failed, WSAEWOULDBLOCK, recv_retry_count full, socket= %d, error: %d", socket, error);
+				PacketRecvList.LockFreeNode(packet_node);
+				return false; // This could receive package anymore.
+			}
+			Logger::Log("RecvEx #1 recv failed, socket= %d, error: %d", socket, error);
+			PacketRecvList.LockFreeNode(packet_node);
+			return false;
+		}
+	}
+
+	HeadPacketInfo* head_packet = (HeadPacketInfo*)packet_node->Packet;
+	recv_packet_max = head_packet->PacketLength - PACKET_LENGTH_SIZE;
+
+	while (recv_packet_max > 0)
+	{
+		// Receive until get a complete package
+		recv_length = ::recv(socket, &packet_node->Packet[buff_packet_index], recv_packet_max, 0);
+		if (recv_length > 0)
+		{
+			recv_packet_max -= recv_length;
+			buff_packet_index += recv_length;
+		}
+		else if (recv_length == 0)
+		{
+			Logger::Log("RecvEx #2 recv notice, client connection closed, socket= %d", socket);
+			PacketRecvList.LockFreeNode(packet_node);
+			return false;
+		}
+		else
+		{
+			int error = ::WSAGetLastError();
+			if (error == WSAEWOULDBLOCK) // 10035 - recv buffer has no more package
+			{
+				if (++recv_retry_count < recv_retry_max)
+				{
+					::Sleep(1);
+					continue;
+				}
+				Logger::Log("RecvEx #2 recv failed, WSAEWOULDBLOCK, recv_retry_count full, socket= %d, error: %d", socket, error);
+				PacketRecvList.LockFreeNode(packet_node);
+				return false;
+			}
+			Logger::Log("RecvEx #2 recv failed, socket= %d, error: %d", socket, error);
+			PacketRecvList.LockFreeNode(packet_node);
+			return false;
+		}
+	}
+
+	if (recv_packet_max == 0)
+	{
+		packet_node->ActionType = ACTION__PACKET;
+		packet_node->Socket = socket;
+		packet_node->PacketLength = head_packet->PacketLength;
+		PacketRecvList.LockLink(packet_node);
+		GameplayThread.Awake(); // Awake sGameplayThreadProc
+	}
+	else
+	{
+		static int s_count = 0;
+		Logger::Log("RecvEx #3 socket= %d, ERROR packet_length= %d, s_count= %d", socket, head_packet->PacketLength, ++s_count);
+		PacketRecvList.LockFreeNode(packet_node);
+	}
+
+	return true;
 }
 
 void TCPServer::Gameplay_InThread()
 {
-	PacketInfo* packet = NULL;
-	TSNode< RecvPacketInfo >* packet_node = NULL;
+	SOCKET_CLIENT_NODE* client_node = NULL;
+	RECV_PACKET_NODE* packet_node = NULL;
+	PacketBuffer* packet = NULL;
 
 	while (RunFlag)
 	{
-		GameplayThread.Wait();
-		while (packet_node = ReceiveList.LockGetHeadNode())
+		GameplayThread.Wait(); // Block wait
+		while (packet_node = PacketRecvList.LockGetHeadNode())
 		{
-			packet = (PacketInfo*)packet_node->Packet;
-			if (strcmp(packet->Message, "server_exit") == 0) // temp
+			client_node = GetSocketClientNode(packet_node->Socket); // TODO : index_table for quick search.
+			packet = (PacketBuffer*)packet_node->Packet;
+
+			if (packet && ::strcmp(packet->Buffer, "server_exit") == 0) // test : client shut server down.
 			{
-				RunFlag = false;
-				CloseSocket(ListenSocket); // Turn off listen socket, Wake select.
-				AcceptThread.Start();
+				PacketRecvList.LockUnlinkFreeNode(packet_node);
+				ServerExit();
 				break;
 			}
 
-			// Deal with logical tasks after receive packet.
-			vOnGameplayReceivePacket(packet_node);
+			switch (packet_node->ActionType)
+			{
+				case ACTION__CREATE_CLIENT:
+				{
+					CreateClientNode(packet_node);  // Initialize player data
+					break;
+				}
+				case ACTION__RELEASE_CLIENT:
+				{
+					FreeClientNode(packet_node);
+					break;
+				}
+				case ACTION__PACKET:
+				{
+					D_CHECK_BREAK(client_node);
+					D_CHECK_BREAK(packet);
 
-			ReceiveList.LockUnlinkFreeNode(packet_node);
+					// Check if package order number are the same.
+					if (packet->PacketOrderNumber == ++client_node->C2S_PacketOrderNumber)
+					{
+						if (packet->PacketType == PACKET__C2S_ALIVE)
+							Logger::Log("Gameplay   socket= %d, packet_length= %d, [%d], alive packet.", packet_node->Socket, packet_node->PacketLength, packet->PacketOrderNumber);
+						else
+							Logger::Log("Gameplay   socket= %d, packet_length= %d, [%d], buffer= %s", packet_node->Socket, packet_node->PacketLength, packet->PacketOrderNumber, packet->Buffer);
+					}
+					else
+					{
+						// Package order number are not the same.
+						Logger::Log("Gameplay   ERROR PacketOrderNumber : socket= %d, packet_length= %d, client[%d], server[%d], buffer= %s", packet_node->Socket, packet_node->PacketLength, packet->PacketOrderNumber, client_node->C2S_PacketOrderNumber, packet->Buffer);
+						CloseSocket(client_node->Socket); // Cut off connection.
+						break;
+					}
+
+					// Clear hearthbeat
+					client_node->AliveTimeout = {};
+
+					switch (packet->PacketType)
+					{
+						case PACKET__C2S_ALIVE: // hearthbeat package
+						{
+							break;
+						}
+						default:
+						{
+							// GameServer can deal with messenge adter received
+							vOnGameplayReceivePacket(client_node, packet_node, packet);
+							break;
+						}
+					}
+					CheckClientAlive();
+					break;
+				}
+			}
+
+			PacketRecvList.LockUnlinkFreeNode(packet_node);
 		}
 	}
 
 	GameplayThread.Release();
+	Logger::Log("Gameplay_InThread END.");
+}
+
+SOCKET_CLIENT_NODE* TCPServer::GetSocketClientNode(SOCKET socket)
+{
+	SOCKET_CLIENT_NODE* client_node = ClientList.pHeadNode;
+	while (client_node)
+	{
+		if (client_node->Socket == socket)
+		{
+			return client_node;
+		}
+		client_node = client_node->pNext;
+	}
+	return NULL;
+}
+
+void TCPServer::CheckClientAlive()
+{
+	const UINT delay_time = 60 * MILLI_SECOND; // 60s
+	SOCKET_CLIENT_NODE* client_node = ClientList.pHeadNode;
+	while (client_node)
+	{
+		if (Tool::sDelayTime(client_node->AliveTimeout.StartTime, client_node->AliveTimeout.EndTime, delay_time))
+		{
+			Logger::Log("client timeout, close socket= %d", client_node->Socket);
+			client_node->AliveTimeoutFlag = true;
+			// Close socket，trigger recv event，let FreeClientNode() can release player data.
+			::closesocket(client_node->Socket);
+		}
+		client_node = client_node->pNext;
+	}
 }
 
 void TCPServer::Send_InThread()
 {
-	TDNode< SocketInfo >* socket_node = NULL;
-	TSNode< SendPacketInfo >* packet_node = NULL;
+	SEND_PACKET_NODE* packet_node = NULL;
+	SOCKET_NODE* socket_node = NULL;
 
 	while (RunFlag)
 	{
 		SendThread.Wait();
-		while (packet_node = SendList.LockGetHeadNode())
+		while (packet_node = PacketSendList.LockGetHeadNode())
 		{
-			switch (packet_node->SendType)
+			if (SocketSendCache.SocketTableUseCount != SocketSendList.NodeLinkCount)
 			{
-			case SEND__ALL:
-			{
-				SocketList.Locker.Lock();   // lock
-				socket_node = SocketList.pHeadNode;
+				// Optimize：Put socket list into socket cache table lower down lock competition
+				SocketSendList.Locker.Lock();   // lock
+				SocketSendCache.SocketTableUseCount = 0;
+				socket_node = SocketSendList.pHeadNode;
 				while (socket_node)
 				{
-					Send(socket_node->Socket, packet_node->Packet, packet_node->PacketLength);
+					SocketSendCache.SocketTable[SocketSendCache.SocketTableUseCount++] = socket_node->Socket;
 					socket_node = socket_node->pNext;
 				}
-				SocketList.Locker.Unlock(); // unlock
-				break;
-			}
-			case SEND__SELF:
-			{
-				break;
-			}
-			case SEND__NON_SELF:
-			{
-				break;
-			}
+				SocketSendList.Locker.Unlock(); // unlock
 			}
 
-			SendList.LockUnlinkFreeNode(packet_node);
+			switch (packet_node->SendType)
+			{
+				case SEND__ALL:
+				{
+					const int max = SocketSendCache.SocketTableUseCount;
+					for (int i = 0; i < max; ++i)
+					{
+						SendEx(SocketSendCache.SocketTable[i], packet_node->Packet, packet_node->PacketLength);
+					}
+					break;
+				}
+				case SEND__SELF:
+				{
+					break;
+				}
+				case SEND__NON_SELF:
+				{
+					break;
+				}
+				case SEND__GROUP_ALL:
+				{
+					break;
+				}
+				case SEND__GROUP_SELF:
+				{
+					break;
+				}
+				case SEND__GROUP_NON_SELF:
+				{
+					break;
+				}
+			}
+
+			PacketSendList.LockUnlinkFreeNode(packet_node);
 		}
 	}
 
 	SendThread.Release();
+	Logger::Log("Send_InThread END.");
 }
 
-void TCPServer::AddSendList(_SEND_TYPE_ send_type, SOCKET socket, char* packet, WORD packet_length)
+void TCPServer::AddSendList(_SEND_TYPE_ send_type, SOCKET_CLIENT_NODE* client_node, HeadPacketInfo* packet)
 {
-	TSNode< SendPacketInfo >* send_packet_node = SendList.LockGetNode();
-	send_packet_node->Socket = socket;
+	packet->PacketOrderNumber = ++client_node->S2C_PacketOrderNumber;
+
+	SEND_PACKET_NODE* send_packet_node = PacketSendList.LockGetNode();
 	send_packet_node->SendType = send_type;
-	send_packet_node->PacketLength = packet_length;
-	Tool::sMemcpy(send_packet_node->Packet, PACKET_BUFFER_MAX, packet, packet_length);
-	SendList.LockLink(send_packet_node);
-	SendThread.Start(); // Wake up SendThreadProc
+	send_packet_node->Socket = client_node->Socket;
+	send_packet_node->PacketLength = packet->PacketLength;
+	Tool::sMemcpy(send_packet_node->Packet, PACKET_BUFFER_MAX, packet, packet->PacketLength);
+	PacketSendList.LockLink(send_packet_node);
+	SendThread.Awake(); // Awake SendThreadProc
 }
 
-bool TCPServer::Send(SOCKET socket, const char* packet, WORD packet_length)
+bool TCPServer::SendEx(SOCKET socket, char* packet, WORD packet_length)
 {
-	int send_length = ::send(socket, packet, packet_length, 0);
-	if (send_length > 0)
+	int  send_packet_max = packet_length;
+	int  send_length = 0;
+	int  buff_packet_index = 0;
+
+	int  send_retry_count = 0;
+	const int send_retry_max = 5000;
+
+	while (send_packet_max > 0)
 	{
-		Logger::Log("socket= %d, bytes send_length: %d", socket, send_length);
-
-		return true;
+		send_length = ::send(socket, &packet[buff_packet_index], send_packet_max, 0);
+		if (send_length > 0)
+		{
+			send_packet_max -= send_length;
+			buff_packet_index += send_length;
+		}
+		else
+		{
+			int error = ::WSAGetLastError();
+			if (error == WSAEWOULDBLOCK) // 10035
+			{
+				if (++send_retry_count < send_retry_max)
+				{
+					::Sleep(1);
+					continue;
+				}
+				Logger::Log("send failed, WSAEWOULDBLOCK, send_retry_count full, socket= %d, error: %d", socket, error);
+				return false; // 此socket可能已經發生錯誤.
+			}
+			Logger::Log("send failed, socket= %d, error: %d", socket, error);
+			return false;
+		}
 	}
-
-	int error = ::WSAGetLastError();
-	Logger::Log("send failed, socket= %d, error: %d", socket, error);
+	Logger::Log("send okay, send_length: %d, socket= %d", send_length, socket);
 	return false;
 }
 
@@ -444,9 +733,21 @@ void TCPServer::CloseSocket(SOCKET& socket)
 	}
 }
 
+void TCPServer::ServerExit()
+{
+	RunFlag = false;
+
+	CloseSocket(ListenSocket); // Shutdown ListenSocket，select will be wake up and do close task.
+
+	// 每個thread都喚醒，進行關閉流程。
+	AcceptThread.Awake();
+	GameplayThread.Awake();
+	SendThread.Awake();
+}
+
 void TCPServer::ShutdownAndCloseSocket()
 {
-	TDNode< SocketContext >* client_node = ClientList.pHeadNode, * del_client_node = NULL;
+	SOCKET_CLIENT_NODE* client_node = ClientList.pHeadNode, * del_client_node = NULL;
 	while (client_node)
 	{
 		if (client_node->Socket != INVALID_SOCKET)
@@ -474,17 +775,14 @@ void TCPServer::ShutdownAndCloseSocket()
 
 void TCPServer::Release()
 {
-	RunFlag = false;
-	CloseSocket(ListenSocket);
-
 	AcceptThread.ReleaseWait();
 	GameplayThread.ReleaseWait();
-	SendThread.Release();
 	SendThread.ReleaseWait();
 
 	ShutdownAndCloseSocket();
 
-	::WSACleanup(); // Release winsock
+	::WSACleanup();
 
 	MainMemoryPool::sMemoryPoolRelease();
+	MemoryCounter::sShow_MemoryUseCount();
 }
