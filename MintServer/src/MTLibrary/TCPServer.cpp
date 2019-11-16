@@ -312,20 +312,20 @@ void TCPServer::FreeClientNode(TDNode< SocketContext >*& client_node)
 
 bool TCPServer::Receive(SocketContext* node)
 {
-	TSNode< RecvPocketInfo >* pocket_node = ReceiveList.LockGetNode();
+	TSNode< RecvPacketInfo >* packet_node = ReceiveList.LockGetNode();
 
-	int recv_length = ::recv(node->Socket, pocket_node->Pocket, POCKET_BUFFER_MAX, 0);
+	int recv_length = ::recv(node->Socket, packet_node->Packet, PACKET_BUFFER_MAX, 0);
 	if (recv_length > 0)
 	{
-		PocketInfo* pocket = (PocketInfo*)pocket_node->Pocket;
-		Logger::Log("socket= %d, bytes recv_length= %d, [%d] %s¡G%s", node->Socket, recv_length, pocket->Number, pocket->Name, pocket->Message);
-		pocket_node->PocketLength = recv_length;
-		pocket_node->Socket = node->Socket;
-		ReceiveList.LockLink(pocket_node);
+		PacketInfo* packet = (PacketInfo*)packet_node->Packet;
+		Logger::Log("socket= %d, bytes recv_length= %d, [%d] %s¡G%s", node->Socket, recv_length, packet->Number, packet->Name, packet->Message);
+		packet_node->PacketLength = recv_length;
+		packet_node->Socket = node->Socket;
+		ReceiveList.LockLink(packet_node);
 		GameplayThread.Start(); // Wake up GameplayThreadProc
 		return true;
 	}
-	ReceiveList.LockFreeNode(pocket_node);
+	ReceiveList.LockFreeNode(packet_node);
 
 	if (recv_length == 0)
 	{
@@ -341,16 +341,16 @@ bool TCPServer::Receive(SocketContext* node)
 
 void TCPServer::Gameplay_InThread()
 {
-	PocketInfo* pocket = NULL;
-	TSNode< RecvPocketInfo >* pocket_node = NULL;
+	PacketInfo* packet = NULL;
+	TSNode< RecvPacketInfo >* packet_node = NULL;
 
 	while (RunFlag)
 	{
 		GameplayThread.Wait();
-		while (pocket_node = ReceiveList.LockGetHeadNode())
+		while (packet_node = ReceiveList.LockGetHeadNode())
 		{
-			pocket = (PocketInfo*)pocket_node->Pocket;
-			if (strcmp(pocket->Message, "server_exit") == 0) // temp
+			packet = (PacketInfo*)packet_node->Packet;
+			if (strcmp(packet->Message, "server_exit") == 0) // temp
 			{
 				RunFlag = false;
 				CloseSocket(ListenSocket); // Turn off listen socket, Wake select.
@@ -358,10 +358,10 @@ void TCPServer::Gameplay_InThread()
 				break;
 			}
 
-			// Deal with logical tasks after receive pocket.
-			vOnGameplayReceivePocket(pocket_node);
+			// Deal with logical tasks after receive packet.
+			vOnGameplayReceivePacket(packet_node);
 
-			ReceiveList.LockUnlinkFreeNode(pocket_node);
+			ReceiveList.LockUnlinkFreeNode(packet_node);
 		}
 	}
 
@@ -371,14 +371,14 @@ void TCPServer::Gameplay_InThread()
 void TCPServer::Send_InThread()
 {
 	TDNode< SocketInfo >* socket_node = NULL;
-	TSNode< SendPocketInfo >* pocket_node = NULL;
+	TSNode< SendPacketInfo >* packet_node = NULL;
 
 	while (RunFlag)
 	{
 		SendThread.Wait();
-		while (pocket_node = SendList.LockGetHeadNode())
+		while (packet_node = SendList.LockGetHeadNode())
 		{
-			switch (pocket_node->SendType)
+			switch (packet_node->SendType)
 			{
 			case SEND__ALL:
 			{
@@ -386,7 +386,7 @@ void TCPServer::Send_InThread()
 				socket_node = SocketList.pHeadNode;
 				while (socket_node)
 				{
-					Send(socket_node->Socket, pocket_node->Pocket, pocket_node->PocketLength);
+					Send(socket_node->Socket, packet_node->Packet, packet_node->PacketLength);
 					socket_node = socket_node->pNext;
 				}
 				SocketList.Locker.Unlock(); // unlock
@@ -402,27 +402,27 @@ void TCPServer::Send_InThread()
 			}
 			}
 
-			SendList.LockUnlinkFreeNode(pocket_node);
+			SendList.LockUnlinkFreeNode(packet_node);
 		}
 	}
 
 	SendThread.Release();
 }
 
-void TCPServer::AddSendList(_SEND_TYPE_ send_type, SOCKET socket, char* pocket, WORD pocket_length)
+void TCPServer::AddSendList(_SEND_TYPE_ send_type, SOCKET socket, char* packet, WORD packet_length)
 {
-	TSNode< SendPocketInfo >* send_pocket_node = SendList.LockGetNode();
-	send_pocket_node->Socket = socket;
-	send_pocket_node->SendType = send_type;
-	send_pocket_node->PocketLength = pocket_length;
-	Tool::sMemcpy(send_pocket_node->Pocket, POCKET_BUFFER_MAX, pocket, pocket_length);
-	SendList.LockLink(send_pocket_node);
+	TSNode< SendPacketInfo >* send_packet_node = SendList.LockGetNode();
+	send_packet_node->Socket = socket;
+	send_packet_node->SendType = send_type;
+	send_packet_node->PacketLength = packet_length;
+	Tool::sMemcpy(send_packet_node->Packet, PACKET_BUFFER_MAX, packet, packet_length);
+	SendList.LockLink(send_packet_node);
 	SendThread.Start(); // Wake up SendThreadProc
 }
 
-bool TCPServer::Send(SOCKET socket, const char* pocket, WORD pocket_length)
+bool TCPServer::Send(SOCKET socket, const char* packet, WORD packet_length)
 {
-	int send_length = ::send(socket, pocket, pocket_length, 0);
+	int send_length = ::send(socket, packet, packet_length, 0);
 	if (send_length > 0)
 	{
 		Logger::Log("socket= %d, bytes send_length: %d", socket, send_length);

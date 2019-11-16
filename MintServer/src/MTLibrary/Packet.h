@@ -1,13 +1,13 @@
 #pragma once
 #include <windows.h>
 
-#define POCKET_BUFFER_MAX    512
+#define PACKET_BUFFER_MAX    512
 
-struct RecvPocketInfo
+struct RecvPacketInfo
 {
 	SOCKET Socket;
-	WORD   PocketLength;
-	char   Pocket[POCKET_BUFFER_MAX];
+	WORD   PacketLength;
+	char   Packet[PACKET_BUFFER_MAX];
 };
 
 enum _SEND_TYPE_
@@ -17,25 +17,25 @@ enum _SEND_TYPE_
 	SEND__NON_SELF,
 };
 
-struct SendPocketInfo
+struct SendPacketInfo
 {
 	BYTE   SendType; // _SEND_TYPE_
 	SOCKET Socket;
-	WORD   PocketLength;
-	char   Pocket[POCKET_BUFFER_MAX];
+	WORD   PacketLength;
+	char   Packet[PACKET_BUFFER_MAX];
 };
 
 #define NAME_BUFFER_MAX      16
 #define MESSAGE_BUFFER_MAX   128
 #define BUFFER_MAX           512
 
-struct HeadPocketInfo
+struct HeadPacketInfo
 {
 	BYTE Number;
 	char Name[NAME_BUFFER_MAX];
 };
 
-struct PocketInfo : HeadPocketInfo
+struct PacketInfo : HeadPacketInfo
 {
 	char Message[MESSAGE_BUFFER_MAX];
 };

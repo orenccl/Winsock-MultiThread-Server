@@ -3,3 +3,4 @@
 *.tlog
 *.vcxproj
 *.filters
+bin-int/Debug-windows-x86/MintServer/MintServer.vcxproj.FileListAbsolute.txt

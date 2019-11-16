@@ -9,7 +9,7 @@
 #include "MTLibrary/MemoryPool.h"
 #include "MTLibrary/LockList.hpp"
 #include "MTLibrary/Thread.h"
-#include "MTLibrary/Pocket.h"
+#include "MTLibrary/Packet.h"
 
 #define SERVER_PORT   27015
 
@@ -32,8 +32,8 @@ class TCPServer
 	TMPSinglyLockList< SocketInfo >      AcceptList;  // When there is a new connection, Accept_InThread put it into AcceptList, List to be initialize in Select_InMainThread.
 	TMPDoublyList< SocketContext >       ClientList;
 	TMPDoublyLockList< SocketInfo >      SocketList;
-	TMPSinglyLockList< RecvPocketInfo >  ReceiveList; // When received pocket, main thread put it into ReceiveList, List to be receive in Gameplay_InThread.
-	TMPSinglyLockList< SendPocketInfo >  SendList;    // List to be send in Send_InThread.
+	TMPSinglyLockList< RecvPacketInfo >  ReceiveList; // When received pocket, main thread put it into ReceiveList, List to be receive in Gameplay_InThread.
+	TMPSinglyLockList< SendPacketInfo >  SendList;    // List to be send in Send_InThread.
 	bool        CreateSucceedFlag;                   
 	bool        RunFlag;                             
 
@@ -63,6 +63,6 @@ protected:
 	bool Create(WORD port);
 	void Release();
 	void AddSendList(_SEND_TYPE_ send_type, SOCKET socket, char* pocket, WORD pocket_length);
-	virtual void vOnGameplayReceivePocket(TSNode< RecvPocketInfo >* pocket_node) {} // Could be modify by inheritance Class.
+	virtual void vOnGameplayReceivePacket(TSNode< RecvPacketInfo >* pocket_node) {} // Could be modify by inheritance Class.
 	void MainRun(); // Main thread entry point
 };
