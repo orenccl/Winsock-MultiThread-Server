@@ -3,7 +3,7 @@
 ![](https://img.shields.io/github/license/orenccl/Winsock-Multi-Client-Server)  
 
 ## The Plan  
-Learn how to careat a Winsock-Multi-Client-Server, and record how I learn it.  
+Learn how to careat a Winsock-Multi-Client-Server by using windows API, and record how I learn it.  
 
 ## Why using C++?  
 ### Pros  
@@ -88,3 +88,5 @@ Platform : Window x64
 [Toturial 2 - Memory](https://hackmd.io/@Jun/HJnPquHsS)  
 
 [Toturial 3 - Process and Thread](https://hackmd.io/@Jun/rJndT3LoS)
+
+[Toturial 4 - Package](https://hackmd.io/@Jun/SJ6RO76jH)
