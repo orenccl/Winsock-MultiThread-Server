@@ -1,34 +1,68 @@
 #pragma once
-#define FD_SETSIZE     1000 // socket max
 
-#include "MTLibrary/List/TMPDoublyList.hpp"
+#define FD_SETSIZE        1000 // ­Modify Windos define fd_set structure, socket array max 1000
+#define CONNECTION_MAX    FD_SETSIZE
+#define ACCEPT_LIST_MAX   1000
+#define RECEIVE_LIST_MAX  1000
+#define SEND_LIST_MAX     1000
+
+#include "MTLibrary/MemoryPool.h"
+#include "MTLibrary/LockList.hpp"
+#include "MTLibrary/Thread.h"
+#include "MTLibrary/Pocket.h"
 
 #define SERVER_PORT   27015
+
+struct SocketInfo
+{
+	SOCKET  Socket;
+	char    IP[LENGTH_16];
+};
 
 struct SocketContext
 {
 	SOCKET  Socket;
-	void   *pUserData;
+	char    IP[LENGTH_16];
+	void* pUserData;
 };
 
 class TCPServer
 {
-protected :
-	SOCKET  ListenSocket;
-	TMPDoublyList< SocketContext > ClientList;
-	bool    CreateSucceedFlag;
-	bool    RunFlag;
+	SOCKET      ListenSocket;
+	TMPSinglyLockList< SocketInfo >      AcceptList;  // When there is a new connection, Accept_InThread put it into AcceptList, List to be initialize in Select_InMainThread.
+	TMPDoublyList< SocketContext >       ClientList;
+	TMPDoublyLockList< SocketInfo >      SocketList;
+	TMPSinglyLockList< RecvPocketInfo >  ReceiveList; // When received pocket, main thread put it into ReceiveList, List to be receive in Gameplay_InThread.
+	TMPSinglyLockList< SendPocketInfo >  SendList;    // List to be send in Send_InThread.
+	bool        CreateSucceedFlag;                   
+	bool        RunFlag;                             
 
+	CThreadEx   AcceptThread;                        
+	CThread     GameplayThread;                      
+	CThread     SendThread;                          
+	static UINT WINAPI sAcceptThreadProc(LPVOID param);
+	static UINT WINAPI sGameplayThreadProc(LPVOID param);
+	static UINT WINAPI sSendThreadProc(LPVOID param);
+
+	bool CreateWinsock(WORD port);
+	bool Receive(SocketContext* node);
+	bool Send(SOCKET socket, const char* pocket, WORD pocket_length);
+	void CloseSocket(SOCKET& socket);
+	void ShutdownAndCloseSocket();
+	
+	void CreateClientNode(TSNode< SocketInfo >* accept_node);
+	void FreeClientNode(TDNode< SocketContext >*& client_node);
+	
+	void Select_InMainThread(); // MainThread execute select to detect new connect event or pocket event
+	void Accept_InThread();     // sAcceptThreadProc deal with socket connect
+	void Gameplay_InThread();   // sGameplayThreadProc deal with logical tasks.
+	void Send_InThread();       // sSendThreadProc deal with TCP pocket.
+protected:
 	TCPServer();
 
-	bool Create( WORD port );
-	bool CreateWinsock( WORD port );
-	void Select();
-	void Accept();
-	bool Receive( SocketContext* node );
-	void CloseSocket( SOCKET &socket );
-	void ShutdownAndCloseSocket();
+	bool Create(WORD port);
 	void Release();
-
-	void Run();
+	void AddSendList(_SEND_TYPE_ send_type, SOCKET socket, char* pocket, WORD pocket_length);
+	virtual void vOnGameplayReceivePocket(TSNode< RecvPocketInfo >* pocket_node) {} // Could be modify by inheritance Class.
+	void MainRun(); // Main thread entry point
 };

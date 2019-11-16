@@ -1,194 +1,437 @@
-#include "mtpch.h"
+﻿#include "mtpch.h"
 #include "MTLibrary/TCPServer.h"
-#include "MTLibrary/MemoryPool.h"
+#include "MTLibrary/Tool.h"
 
 #pragma comment( lib, "WS2_32.lib" ) // winsock2.h
 
-#define DEFAULT_BUFF_LENGTH  512
-
 TCPServer::TCPServer()
 {
-	memset(this, 0, sizeof(TCPServer));
+	::memset(this, 0, sizeof(TCPServer)); // Initial entire TCPServer to zero.
 }
-
 
 bool TCPServer::Create(WORD port)
 {
-	const DWORD memory_pool_bytes_max = 100*MB;
+	const UINT memory_pool_bytes_max = 100 * MB;
 	MainMemoryPool::sMemoryPoolCreate(memory_pool_bytes_max);
 
 	if (CreateWinsock(port) == false)
 		return false;
 
-	ClientList.Create( FD_SETSIZE );
+	// Distribute memory to every List.
+	AcceptList.Create(ACCEPT_LIST_MAX);
+	ClientList.Create(CONNECTION_MAX);
+	SocketList.Create(CONNECTION_MAX);
+	ReceiveList.Create(RECEIVE_LIST_MAX);
+	SendList.Create(SEND_LIST_MAX);
 
 	CreateSucceedFlag = true;
 	RunFlag = true;
 
+	Logger::Log("TCPServer::Create Succeed.");
+
+	// Initialize thread
+	AcceptThread.Create(sAcceptThreadProc, this);
+	GameplayThread.Create(sGameplayThreadProc, this);
+	SendThread.Create(sSendThreadProc, this);
+
 	return true;
 }
-
 
 bool TCPServer::CreateWinsock(WORD port)
 {
 	WSADATA wsa_data = { 0 };
 	int result = 0;
 
-	result = WSAStartup( 0x202, &wsa_data);
+	// Winsock version 2.2
+	result = ::WSAStartup(0x202, &wsa_data);
 	if (result != 0)
 	{
-		printf("WSAStartup failed, error: %d\n", result);
+		Logger::Log("WSAStartup failed, error: %d", result);
 		return false;
 	}
 
-	ListenSocket = socket( AF_INET, SOCK_STREAM, IPPROTO_TCP );
+	// Create a local listen socket, to accept client's connection
+	// AF_INET : IPv4 Internet Protocol
+	// SOCK_STREAM : Data streaming, corresponding to TCP transmit protocal
+	// IPPROTO_TCP : Use TCP transmit Protocal
+	ListenSocket = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 	if (ListenSocket == INVALID_SOCKET)
 	{
-		printf( "socket failed, error: %ld\n", WSAGetLastError() );
+		Logger::Log("socket failed, error: %ld", ::WSAGetLastError());
 		return false;
 	}
 
+	// Setting Address Info
 	sockaddr_in addr = { 0 };
+	// Use IPv4 Internet Protocol
 	addr.sin_family = AF_INET;
+	// Set port, prepare a port to listen
+	//( use htons() function to transform is because Network Byte Order may be different to Host Byte Order
 	addr.sin_port = htons(port);
+	// Set address to 0.0.0.0, means it can receive all package from binding port
+	// regardless Network Cark address
 	addr.sin_addr.s_addr = INADDR_ANY;
 
-	result = bind(ListenSocket, (SOCKADDR*)&addr, sizeof(addr));
+	// Bind to ListenSocket, if binding fail, reason could be port occupied.
+	result = ::bind(ListenSocket, (SOCKADDR*)&addr, sizeof(addr));
 	if (result == SOCKET_ERROR)
 	{
-		printf("bind failed, error: %d, port= %d\n", WSAGetLastError(), port);
+		Logger::Log("bind failed, error: %d, port= %d", ::WSAGetLastError(), port);
 		return false;
 	}
 
-	result = listen(ListenSocket, SOMAXCONN);
+	// Enable listen, could receive connection from client
+	// Second parm is use to set maximum listen list, SOMAXCONN means system maximum
+	result = ::listen(ListenSocket, SOMAXCONN);
 	if (result == SOCKET_ERROR)
 	{
-		printf("listen failed, error: %d\n", WSAGetLastError());
+		Logger::Log("listen failed, error: %d", ::WSAGetLastError());
+		return false;
+	}
+
+	// Set ListenSocket to non-blocking mode
+	// FIONBIO : set/clear non-blocking i/o
+	unsigned long non_blocking_mode = 1; // ­1 = non-blocking
+	result = ::ioctlsocket(ListenSocket, FIONBIO, &non_blocking_mode);
+	if (result == SOCKET_ERROR)
+	{
+		printf("ioctlsocket failed, error: %d", ::WSAGetLastError());
 		return false;
 	}
 
 	return true;
 }
 
-void TCPServer::Select()
+void TCPServer::MainRun()
+{
+	if (CreateSucceedFlag)
+	{
+		Select_InMainThread(); // Deal with select - accept, recv.
+	}
+}
+
+UINT WINAPI TCPServer::sAcceptThreadProc(LPVOID param)
+{
+	Logger::Log("TCPServer::sAcceptThreadProc running...");
+	TCPServer* server = (TCPServer*)param;
+	server->Accept_InThread();
+	return 0;
+}
+
+UINT WINAPI TCPServer::sGameplayThreadProc(LPVOID param)
+{
+	Logger::Log("TCPServer::sGameplayThreadProc running...");
+	TCPServer* server = (TCPServer*)param;
+	server->Gameplay_InThread();
+	return 0;
+}
+
+UINT WINAPI TCPServer::sSendThreadProc(LPVOID param)
+{
+	Logger::Log("TCPServer::sSendThreadProc running...");
+	TCPServer* server = (TCPServer*)param;
+	server->Send_InThread();
+	return 0;
+}
+
+void TCPServer::Select_InMainThread()
 {
 	// Initialize socket array
-	fd_set readfds = { 0 };
+	fd_set fds_read = { 0 };
 
-	timeval timeout = { 0, 100 * MILLI_SECOND };
+	const long milliseconds =  100 * MILLI_SECOND;
+
+	/*!
+	* @param0 : tv_sec = second.
+	* @param1 : tv_usec = units. 0 = ms, 1 = s.
+	*/
+	timeval timeout = { 0, milliseconds };
 	int result = 0;
 
-	TDNode< SocketContext >* node = NULL, * del_node = NULL;
+	TSNode< SocketInfo >* accept_node = NULL;
+	TDNode< SocketContext >* client_node = NULL, * del_client_node = NULL;
 
-	Logger::Log("TCP server - select mode - multi-client");
+	Logger::Log("TCP server - select mode - multi-threading");
 
 	while (RunFlag)
 	{
-		// Clear socket array
-		FD_ZERO(&readfds);
-
-		// Add ListenSocket into array
-		FD_SET(ListenSocket, &readfds);
-
-		// Add Clientsocket into array
-		if (ClientList.NodeUseCount > 0)
+		while (AcceptList.NodeLinkCount)
 		{
-			node = ClientList.pHeadNode;
-			while (node)
-			{
-				FD_SET(node->Socket, &readfds);
-				node = node->pNext;
-			}
+			accept_node = AcceptList.LockGetHeadNode();
+
+			CreateClientNode(accept_node); // Initial client data
+
+			AcceptList.LockUnlinkFreeNode(accept_node);
 		}
 
-		printf(".");
+		// Clear fds_read array
+		FD_ZERO(&fds_read);
 
-		// select will block until new event
-		result = select(0, &readfds, NULL, NULL, &timeout);
+		// Put listensocket into fds_read array
+		FD_SET(ListenSocket, &fds_read);
+
+		// Put client socket into fds_read array
+		client_node = ClientList.pHeadNode;
+		while (client_node)
+		{
+			FD_SET(client_node->Socket, &fds_read);
+			client_node = client_node->pNext;
+		}
+
+		// select will wait until recv event occur
+		// timeout time is the period program return from select function
+		if (AcceptThread.GetSwitchFlag())
+			result = ::select(0, &fds_read, NULL, NULL, &timeout); // When happen accept event, select go into timer mode, until CreateClientNode finish.
+		else
+			result = ::select(0, &fds_read, NULL, NULL, NULL);     // If nothing to do, blocking.
+
 		if (result == SOCKET_ERROR)
 		{
 			RunFlag = false;
-			Logger::Log("select failed, error: %d", WSAGetLastError());
+			AcceptThread.Start();
+			Logger::Log("select failed, error: %d", ::WSAGetLastError());
 			break;
 		}
 
-		if (FD_ISSET(ListenSocket, &readfds)) // If there has new connection
+		if (FD_ISSET(ListenSocket, &fds_read))    // Check if new connect event occur
 		{
-			Accept();
+			::printf("select_wait... ");
+			AcceptThread.SetSwitchFlag(true);     // Activate select timer mode, deal with accept event
+			AcceptThread.Start();                 // Wake up sAcceptThreadProc
 		}
-		if (ClientList.NodeUseCount > 0) 
+
+		client_node = ClientList.pHeadNode;
+		while (client_node)
 		{
-			node = ClientList.pHeadNode;
-			while (node)
+			if (FD_ISSET(client_node->Socket, &fds_read)) // Check if receive event occur.
 			{
-				if (FD_ISSET(node->Socket, &readfds)) // If there has new pocket
+				if (Receive(client_node) == false)
 				{
-					if (Receive(node) == false)
-					{
-						del_node = node;
-						node = node->pNext;
-						CloseSocket(del_node->Socket);
-						ClientList.Unlink(del_node);
-						ClientList.FreeNode(del_node);
-						continue;
-					}
+					del_client_node = client_node;
+					client_node = client_node->pNext;
+					FreeClientNode(del_client_node);
+					continue;
 				}
-				node = node->pNext;
 			}
+			client_node = client_node->pNext;
 		}
 	}
 }
 
-void TCPServer::Accept()
+void TCPServer::Accept_InThread()
 {
-	SOCKET socket = accept(ListenSocket, NULL, NULL);
-	if (socket > 0)
+	// accept - non-blocking
+
+	int error = 0;
+	SOCKET socket = 0;
+	sockaddr_in client_addr;
+	int client_addr_size = sizeof(client_addr);
+
+	while (RunFlag)
 	{
-		if (ClientList.NodeLinkCount >= FD_SETSIZE)
+		AcceptThread.Wait();
+		while (RunFlag)
 		{
-			closesocket(socket);
-			Logger::Log("warning : ClientList.NodeLinkCount(%d) is full. FD_SETSIZE= %d", ClientList.NodeLinkCount, FD_SETSIZE);
-			return;
+			socket = ::accept(ListenSocket, (SOCKADDR*)&client_addr, &client_addr_size);
+			if (socket == INVALID_SOCKET)
+			{
+				error = ::WSAGetLastError();
+				if (error == WSAEWOULDBLOCK) // 10035 = No new connect request.
+				{
+					AcceptThread.SetSwitchFlag(false); // Set select into block mode
+					break;
+				}
+				// Unexpected error, turn down server.
+				RunFlag = false;
+				CloseSocket(ListenSocket); // Trun off ListenSocket, and wake up select.
+				Logger::Log("accept failed, error: %d", error);
+				break;
+			}
+
+			if (ClientList.NodeLinkCount >= ClientList.ObjectCountMax)
+			{
+				CloseSocket(socket);
+				Logger::Log("warning : ClientList.NodeLinkCount(%d) is full. ClientList.ObjectCountMax= %d", ClientList.NodeLinkCount, ClientList.ObjectCountMax);
+				continue;
+			}
+
+			// Put new connection in to AcceptList
+			TSNode< SocketInfo >* node = AcceptList.LockGetNode();
+			node->Socket = socket;
+			::inet_ntop(AF_INET, &client_addr.sin_addr, node->IP, LENGTH_16); // Turn client address into IP string.
+			AcceptList.LockLink(node);
+
+			Logger::Log("accept ok, create a new connection, socket= %d, IP= %s", node->Socket, node->IP);
 		}
-		TDNode< SocketContext >* node = ClientList.GetNode();
-		node->Socket = socket;
-		ClientList.Link(node);
-		Logger::Log("accept ok, create a new connection, socket= %d", node->Socket);
 	}
-	else
-	{
-		Logger::Log("accept failed, error: %d", WSAGetLastError());
-	}
+
+	AcceptThread.Release();
 }
 
-bool TCPServer::Receive( SocketContext* node )
+void TCPServer::CreateClientNode(TSNode< SocketInfo >* accept_node)
 {
-	char recv_buff[ DEFAULT_BUFF_LENGTH ] = {0};
-	int  recv_buff_len = DEFAULT_BUFF_LENGTH;
+	TDNode< SocketContext >* client_node = ClientList.GetNode();
+	client_node->Socket = accept_node->Socket;
+	Tool::sMemcpy(client_node->IP, LENGTH_16, accept_node->IP, LENGTH_16);
+	ClientList.Link(client_node);
 
-	int recv_len = recv( node->Socket, recv_buff, recv_buff_len, 0 );
-	if( recv_len > 0 )
+	SocketList.Locker.Lock();   // lock
+	TDNode< SocketInfo >* socket_node = SocketList.GetNode();
+	socket_node->Socket = accept_node->Socket;
+	Tool::sMemcpy(socket_node->IP, LENGTH_16, accept_node->IP, LENGTH_16);
+	SocketList.Link(socket_node);
+	SocketList.Locker.Unlock(); // unlock
+}
+
+void TCPServer::FreeClientNode(TDNode< SocketContext >*& client_node)
+{
+	SocketList.Locker.Lock();   // lock
+	TDNode< SocketInfo >* socket_node = SocketList.pHeadNode, * del_socket_node = NULL;
+	while (socket_node)
 	{
-		Logger::Log( "bytes recv_len= %d, recv_buff= %s", recv_len, recv_buff );
-
-		int send_result = send( node->Socket, recv_buff, recv_len, 0 );
-		if( send_result == SOCKET_ERROR )
+		if (socket_node->Socket == client_node->Socket)
 		{
-			Logger::Log( "send failed, socket= %d, error: %d", node->Socket, WSAGetLastError() );
-			return false;
+			del_socket_node = socket_node;
+			break;
 		}
-		Logger::Log( "bytes sent: %d", send_result );
+		socket_node = socket_node->pNext;
+	}
+	if (del_socket_node)
+	{
+		SocketList.Unlink(del_socket_node);
+		SocketList.FreeNode(del_socket_node);
+	}
+	SocketList.Locker.Unlock(); // unlock
+
+	// Release client socket
+	CloseSocket(client_node->Socket);
+
+	ClientList.Unlink(client_node);
+	ClientList.FreeNode(client_node);
+}
+
+bool TCPServer::Receive(SocketContext* node)
+{
+	TSNode< RecvPocketInfo >* pocket_node = ReceiveList.LockGetNode();
+
+	int recv_length = ::recv(node->Socket, pocket_node->Pocket, POCKET_BUFFER_MAX, 0);
+	if (recv_length > 0)
+	{
+		PocketInfo* pocket = (PocketInfo*)pocket_node->Pocket;
+		Logger::Log("socket= %d, bytes recv_length= %d, [%d] %s¡G%s", node->Socket, recv_length, pocket->Number, pocket->Name, pocket->Message);
+		pocket_node->PocketLength = recv_length;
+		pocket_node->Socket = node->Socket;
+		ReceiveList.LockLink(pocket_node);
+		GameplayThread.Start(); // Wake up GameplayThreadProc
 		return true;
 	}
-	else if( recv_len == 0 )
+	ReceiveList.LockFreeNode(pocket_node);
+
+	if (recv_length == 0)
 	{
-		Logger::Log( "connection closed, socket= %d", node->Socket );
+		Logger::Log("client connection closed, socket= %d", node->Socket);
 	}
 	else
 	{
-		int error = WSAGetLastError();
-		Logger::Log( "recv failed, socket= %d, error: %d", node->Socket, error );
+		int error = ::WSAGetLastError();
+		Logger::Log("recv failed, socket= %d, error: %d", node->Socket, error);
 	}
+	return false;
+}
+
+void TCPServer::Gameplay_InThread()
+{
+	PocketInfo* pocket = NULL;
+	TSNode< RecvPocketInfo >* pocket_node = NULL;
+
+	while (RunFlag)
+	{
+		GameplayThread.Wait();
+		while (pocket_node = ReceiveList.LockGetHeadNode())
+		{
+			pocket = (PocketInfo*)pocket_node->Pocket;
+			if (strcmp(pocket->Message, "server_exit") == 0) // temp
+			{
+				RunFlag = false;
+				CloseSocket(ListenSocket); // Turn off listen socket, Wake select.
+				AcceptThread.Start();
+				break;
+			}
+
+			// Deal with logical tasks after receive pocket.
+			vOnGameplayReceivePocket(pocket_node);
+
+			ReceiveList.LockUnlinkFreeNode(pocket_node);
+		}
+	}
+
+	GameplayThread.Release();
+}
+
+void TCPServer::Send_InThread()
+{
+	TDNode< SocketInfo >* socket_node = NULL;
+	TSNode< SendPocketInfo >* pocket_node = NULL;
+
+	while (RunFlag)
+	{
+		SendThread.Wait();
+		while (pocket_node = SendList.LockGetHeadNode())
+		{
+			switch (pocket_node->SendType)
+			{
+			case SEND__ALL:
+			{
+				SocketList.Locker.Lock();   // lock
+				socket_node = SocketList.pHeadNode;
+				while (socket_node)
+				{
+					Send(socket_node->Socket, pocket_node->Pocket, pocket_node->PocketLength);
+					socket_node = socket_node->pNext;
+				}
+				SocketList.Locker.Unlock(); // unlock
+				break;
+			}
+			case SEND__SELF:
+			{
+				break;
+			}
+			case SEND__NON_SELF:
+			{
+				break;
+			}
+			}
+
+			SendList.LockUnlinkFreeNode(pocket_node);
+		}
+	}
+
+	SendThread.Release();
+}
+
+void TCPServer::AddSendList(_SEND_TYPE_ send_type, SOCKET socket, char* pocket, WORD pocket_length)
+{
+	TSNode< SendPocketInfo >* send_pocket_node = SendList.LockGetNode();
+	send_pocket_node->Socket = socket;
+	send_pocket_node->SendType = send_type;
+	send_pocket_node->PocketLength = pocket_length;
+	Tool::sMemcpy(send_pocket_node->Pocket, POCKET_BUFFER_MAX, pocket, pocket_length);
+	SendList.LockLink(send_pocket_node);
+	SendThread.Start(); // Wake up SendThreadProc
+}
+
+bool TCPServer::Send(SOCKET socket, const char* pocket, WORD pocket_length)
+{
+	int send_length = ::send(socket, pocket, pocket_length, 0);
+	if (send_length > 0)
+	{
+		Logger::Log("socket= %d, bytes send_length: %d", socket, send_length);
+
+		return true;
+	}
+
+	int error = ::WSAGetLastError();
+	Logger::Log("send failed, socket= %d, error: %d", socket, error);
 	return false;
 }
 
@@ -196,54 +439,52 @@ void TCPServer::CloseSocket(SOCKET& socket)
 {
 	if (socket != INVALID_SOCKET)
 	{
-		closesocket(socket);
-		socket = 0;
+		::closesocket(socket);
+		socket = INVALID_SOCKET;
 	}
 }
 
 void TCPServer::ShutdownAndCloseSocket()
 {
-	TDNode< SocketContext >* node = ClientList.pHeadNode, * del_node = NULL;
-	while (node)
+	TDNode< SocketContext >* client_node = ClientList.pHeadNode, * del_client_node = NULL;
+	while (client_node)
 	{
-		if (node->Socket != INVALID_SOCKET)
+		if (client_node->Socket != INVALID_SOCKET)
 		{
-			int result = shutdown(node->Socket, SD_SEND);
+			// Shutdown connection
+			// SD_SEND could not be call after shutdown.
+			int result = ::shutdown(client_node->Socket, SD_SEND);
 			if (result == SOCKET_ERROR)
 			{
-				Logger::Log("shutdown failed, socket= %d, error: %d", node->Socket, WSAGetLastError());
+				Logger::Log("shutdown failed, socket= %d, error: %d", client_node->Socket, ::WSAGetLastError());
 			}
-			closesocket(node->Socket);
+			CloseSocket(client_node->Socket);
 		}
-		node = node->pNext;
+		client_node = client_node->pNext;
 	}
 
-	node = ClientList.pHeadNode;
-	while (node)
+	client_node = ClientList.pHeadNode;
+	while (client_node)
 	{
-		del_node = node;
-		node = node->pNext;
-		ClientList.FreeNode(del_node);
+		del_client_node = client_node;
+		client_node = client_node->pNext;
+		ClientList.FreeNode(del_client_node);
 	}
 }
 
 void TCPServer::Release()
 {
 	RunFlag = false;
-	shutdown(ListenSocket, SD_SEND);
 	CloseSocket(ListenSocket);
+
+	AcceptThread.ReleaseWait();
+	GameplayThread.ReleaseWait();
+	SendThread.Release();
+	SendThread.ReleaseWait();
 
 	ShutdownAndCloseSocket();
 
-	WSACleanup();
+	::WSACleanup(); // Release winsock
 
 	MainMemoryPool::sMemoryPoolRelease();
-}
-
-void TCPServer::Run()
-{
-	if (CreateSucceedFlag)
-	{
-		Select();
-	}
 }

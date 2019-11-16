@@ -4,5 +4,8 @@
 class GameServer : public TCPServer
 {
 public:
-	void Run();
+	void MainRun();
+
+	virtual void vOnGameplayReceivePocket(TSNode< RecvPocketInfo >* pocket_node) override;
+	
 };
