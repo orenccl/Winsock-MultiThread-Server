@@ -25,15 +25,15 @@ struct SocketContext
 {
 	SOCKET  Socket;
 	char    IP[LENGTH_16];
-	void* pUserData;
+	void*	pUserData;
 };
 
 #define SOCKET_NODE  TDNode< SocketInfo >
 
 struct SocketCache
 {
-	UINT   SocketTableUseCount;
-	SOCKET SocketTable[CONNECTION_MAX];
+	UINT	SocketTableUseCount;
+	SOCKET	SocketTable[CONNECTION_MAX];
 };
 
 struct TimerInfo
@@ -62,15 +62,15 @@ class TCPServer
 	SocketCache                          SocketSendCache;   // Socket cache table ( For Select_InMainThread use )
 	TMPSinglyLockList< RecvPacketInfo >  PacketRecvList;    // When received pocket, Select_InMainThread put it into PacketRecvList, List to be receive in Gameplay_InThread.
 	TMPSinglyLockList< SendPacketInfo >  PacketSendList;    // List to be send in Send_InThread.
-	TMPDoublyList< SocketClient >       ClientList;		// client SocketClient list ( For Gameplay_InThread use )
+	TMPDoublyList< SocketClient >		 ClientList;		// client SocketClient list ( For Gameplay_InThread use )
 
-	SOCKET             ListenSocket;
-	bool        CreateSucceedFlag;                   
-	bool        RunFlag;                             
+	SOCKET				ListenSocket;
+	bool				CreateSucceedFlag;                   
+	bool				RunFlag;                             
 
-	CAcceptThread   AcceptThread;
-	CThread     GameplayThread;                      
-	CThread     SendThread;                          
+	CAcceptThread		AcceptThread;
+	CThread				GameplayThread;                      
+	CThread				SendThread;                          
 	static UINT WINAPI sAcceptThreadProc(LPVOID param);
 	static UINT WINAPI sGameplayThreadProc(LPVOID param);
 	static UINT WINAPI sSendThreadProc(LPVOID param);
@@ -102,7 +102,7 @@ class TCPServer
 	virtual void vOnGameplayReceivePacket(SOCKET_CLIENT_NODE* client_node, RECV_PACKET_NODE* packet_node, PacketBuffer* packet) {} // Logical tasks after received.
 
 protected:
-	TCPServer();
+	TCPServer() {}
 
 	void AddSendList(_SEND_TYPE_ send_type, SOCKET_CLIENT_NODE* client_node, HeadPacketInfo* packet);
 

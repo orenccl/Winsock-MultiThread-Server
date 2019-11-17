@@ -11,6 +11,8 @@
 
 /*! Standard Library */
 #include <stdio.h>
+#include <stdlib.h>
+#include <conio.h>
 
 /*! MintServer Header */
 #include "MTLibrary/Type.h"

@@ -2,8 +2,6 @@
 #include "MTLibrary/TCPServer.h"
 #include "MTLibrary/Tool.h"
 
-#pragma comment( lib, "WS2_32.lib" ) // winsock2.h
-
 bool TCPServer::Create(WORD port)
 {
 	Logger::Create();
@@ -302,9 +300,6 @@ void TCPServer::RecvFreeClientNode(SOCKET_NODE*& del_socket_node)
 	SocketRecvList.Unlink(del_socket_node);
 	SocketRecvList.FreeNode(del_socket_node);
 
-	//---------------------------------------
-
-	// ±qSocketSendList¥h·j´M»Ý­n§R°£ªºsocket...
 	SocketSendList.Locker.Lock();   // lock
 	SOCKET_NODE* socket_node = SocketSendList.pHeadNode, * del_node = NULL;
 	while (socket_node)
@@ -316,6 +311,7 @@ void TCPServer::RecvFreeClientNode(SOCKET_NODE*& del_socket_node)
 		}
 		socket_node = socket_node->pNext;
 	}
+
 	if (del_node)
 	{
 		SocketSendList.Unlink(del_node);
@@ -612,6 +608,7 @@ void TCPServer::Send_InThread()
 {
 	SEND_PACKET_NODE* packet_node = NULL;
 	SOCKET_NODE* socket_node = NULL;
+	PacketBuffer* packet = NULL;
 
 	while (RunFlag)
 	{
@@ -639,6 +636,9 @@ void TCPServer::Send_InThread()
 					const int max = SocketSendCache.SocketTableUseCount;
 					for (int i = 0; i < max; ++i)
 					{
+						packet = (PacketBuffer*)packet_node->Packet;
+						packet->PacketOrderNumber = ++(GetSocketClientNode(SocketSendCache.SocketTable[i])->S2C_PacketOrderNumber);
+						Tool::sMemcpy(packet_node->Packet, PACKET_BUFFER_MAX, packet, packet->PacketLength);
 						SendEx(SocketSendCache.SocketTable[i], packet_node->Packet, packet_node->PacketLength);
 					}
 					break;
@@ -675,7 +675,7 @@ void TCPServer::Send_InThread()
 
 void TCPServer::AddSendList(_SEND_TYPE_ send_type, SOCKET_CLIENT_NODE* client_node, HeadPacketInfo* packet)
 {
-	packet->PacketOrderNumber = ++client_node->S2C_PacketOrderNumber;
+	//packet->PacketOrderNumber = ++client_node->S2C_PacketOrderNumber;
 
 	SEND_PACKET_NODE* send_packet_node = PacketSendList.LockGetNode();
 	send_packet_node->SendType = send_type;

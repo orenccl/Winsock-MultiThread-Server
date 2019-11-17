@@ -4,6 +4,7 @@
 int main()
 {
 	GameServer server;
+	
 	server.MainRun();
 
 	getc(stdin);
