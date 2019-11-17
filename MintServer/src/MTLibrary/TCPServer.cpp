@@ -649,6 +649,16 @@ void TCPServer::Send_InThread()
 				}
 				case SEND__NON_SELF:
 				{
+					const int max = SocketSendCache.SocketTableUseCount;
+					for (int i = 0; i < max; ++i)
+					{
+						if (packet_node->Socket == SocketSendCache.SocketTable[i])
+							continue;
+						packet = (PacketBuffer*)packet_node->Packet;
+						packet->PacketOrderNumber = ++(GetSocketClientNode(SocketSendCache.SocketTable[i])->S2C_PacketOrderNumber);
+						Tool::sMemcpy(packet_node->Packet, PACKET_BUFFER_MAX, packet, packet->PacketLength);
+						SendEx(SocketSendCache.SocketTable[i], packet_node->Packet, packet_node->PacketLength);
+					}
 					break;
 				}
 				case SEND__GROUP_ALL:
@@ -675,8 +685,6 @@ void TCPServer::Send_InThread()
 
 void TCPServer::AddSendList(_SEND_TYPE_ send_type, SOCKET_CLIENT_NODE* client_node, HeadPacketInfo* packet)
 {
-	//packet->PacketOrderNumber = ++client_node->S2C_PacketOrderNumber;
-
 	SEND_PACKET_NODE* send_packet_node = PacketSendList.LockGetNode();
 	send_packet_node->SendType = send_type;
 	send_packet_node->Socket = client_node->Socket;

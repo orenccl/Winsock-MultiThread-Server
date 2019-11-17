@@ -63,6 +63,8 @@ enum _PACKET_TYPE_
 	PACKET__C2S_NAME,
 	PACKET__C2S_MESSAGE,
 	PACKET__S2C_MESSAGE,
+	PACKET__C2S_MESSAGE_2,
+	PACKET__S2C_MESSAGE_2,
 };
 
 
@@ -81,6 +83,16 @@ struct C2S_Message : HeadPacketInfo
 };
 
 struct S2C_Message : C2S_Message
+{
+
+};
+
+struct C2S_Message_2 : HeadPacketInfo
+{
+	char Message[MESSAGE_BUFFER_MAX];
+};
+
+struct S2C_Message_2 : C2S_Message
 {
 
 };

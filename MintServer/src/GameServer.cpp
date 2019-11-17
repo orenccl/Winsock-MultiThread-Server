@@ -62,5 +62,15 @@ void GameServer::vOnGameplayReceivePacket(SOCKET_CLIENT_NODE* client_node, RECV_
 			AddSendList(SEND__ALL, client_node, &s2c_packet);
 			break;
 		}
+		case PACKET__C2S_MESSAGE_2:
+		{
+			S2C_Message_2 s2c_packet = {};
+			s2c_packet.PacketType = PACKET__S2C_MESSAGE_2;
+			sprintf_s(s2c_packet.Message, MESSAGE_BUFFER_MAX - 1, "%s : %s", player_node->Name, packet->Buffer);
+			s2c_packet.PacketLength = (WORD)(sizeof(HeadPacketInfo) + strlen(s2c_packet.Message));
+
+			AddSendList(SEND__NON_SELF, client_node, &s2c_packet);
+			break;
+		}
 	}
 }

@@ -32,8 +32,8 @@ class TCPClient : public TaskInterface
 
 public:
 	TCPClient()
-		:TaskManager(NULL), RecvPacketLength(0), RecvPacketBufferIndex(0), Client({ 0 }), RecvPacket({0}) {} // class¦Û°Êªì©l¤Æ¬°0
-	
+		:TaskManager(NULL), RecvPacketLength(0), RecvPacketBufferIndex(0), Client({ 0 }), RecvPacket({0}) {}
+
 	bool Create()
 	{
 		if (CreateWinsock() == false)
@@ -53,7 +53,7 @@ public:
 		WSADATA wsaData = { 0 };
 		int result = 0;
 
-		// ªì©l¤Æ winsock¡A¨Ï¥Î2.2ª©¥»
+		// Version 2.2
 		result = ::WSAStartup(MAKEWORD(2, 2), &wsaData);
 		if (result != 0)
 		{
@@ -61,10 +61,10 @@ public:
 			return false;
 		}
 
-		// ³Ð«Ø¤@­Ó³s½u¥Îclient socket
-		// AF_INET : ¨Ï¥ÎIPv4 ¨óÄ³
-		// SOCK_STREAM : ¤@­Ó§Ç¦C¤Æªº³s±µ¾É¦V¦ì¤¸¬y¡A¥i¥H°µ¦ì¤¸¬y¶Ç¿é¡C¹ïÀ³ªºprotocol¬°TCP¡C
-		// IPPROTO_TCP : ¨Ï¥Î TCP ¨óÄ³¡C©Î¤]¥i¶ñ¤JNULL¡Aªí¥Ü¨Ï¥Î¨t²Î¹w³]ªº¨óÄ³¡A§YTCP¨óÄ³¡C
+		// Create a local connect socket, to connect with server.
+		// AF_INET : IPv4 Internet Protocol
+		// SOCK_STREAM : Data streaming, corresponding to TCP transmit protocal
+		// IPPROTO_TCP : Use TCP transmit Protocal
 		Client.Socket = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 		if (Client.Socket == INVALID_SOCKET)
 		{
@@ -72,13 +72,13 @@ public:
 			return false;
 		}
 
-		const char* ip = "127.0.0.1";             // ³s¨ì¥»¾÷ªºserver ip
+		const char* ip = "127.0.0.1";             // Connect to local IP
 		sockaddr_in addr = { 0 };
-		addr.sin_family = AF_INET;                 // ¨Ï¥ÎIPv4 ¨óÄ³
-		addr.sin_port = htons(SERVER_PORT);    // ³]©wport
-		::inet_pton(AF_INET, ip, &addr.sin_addr); // ³]©wIP¡Aclient³s½u¨ìserver¥Î
+		addr.sin_family = AF_INET;                // IPv4 Internet protocal
+		addr.sin_port = htons(SERVER_PORT);       // Set port
+		::inet_pton(AF_INET, ip, &addr.sin_addr); // Set IP for client to connect to.
 
-		result = ::connect(Client.Socket, (SOCKADDR*)&addr, sizeof(addr)); // connect³s½u¨ìserver...
+		result = ::connect(Client.Socket, (SOCKADDR*)&addr, sizeof(addr)); // connect to server
 		if (result == SOCKET_ERROR)
 		{
 			printf("connect failed, error: %d\n", ::WSAGetLastError());
@@ -93,9 +93,9 @@ public:
 		else
 			printf("connect to server !\n");
 
-		// §âConnectSocket³]¬°«Dªý¶ë¼Ò¦¡¡]non-blocking¡^
-		// FIONBIO : ³]©w©Î²M°£«Dªý¶ë¼Ò¦¡
-		unsigned long non_blocking_mode = 1; // ­n±Ò¥Î«Dªý¶ë¼Ò¦¡, ©Ò¥H³]¬°1
+		// Set ConnectSocket non-blocking
+		// FIONBIO : Set or clear non-blocking mode
+		unsigned long non_blocking_mode = 1; // ­1 is set to on-blocking mode
 		result = ::ioctlsocket(Client.Socket, FIONBIO, &non_blocking_mode);
 		if (result == SOCKET_ERROR)
 		{
@@ -115,21 +115,19 @@ public:
 
 	void NameInput()
 	{
-		// ¿é¤J¼ÊºÙ¦r¦ê
-
 		int name_length = 0;
 
 		while (1)
 		{
 			printf("name input : ");
-			::fgets(Client.Name, NAME_BUFFER_MAX, stdin); // fgets()·|µ¥«Ý±qÁä½L¿é¤J¦r¦ê
+			::fgets(Client.Name, NAME_BUFFER_MAX, stdin); // fgets() blocking wait.
 			if (Client.Name[0] == '\n')
 				continue;
 
-			name_length = ::strlen(Client.Name); // ¨ú±o¦r¦êªø«×
+			name_length = ::strlen(Client.Name); // Get Name length.
 			if (name_length > 0)
 			{
-				Client.Name[name_length - 1] = 0; // ¦]¬°¨Ï¥Îfgets()¡Aµ²§À·|¦³¤@­Ó '\n' ²Å¸¹¡A¥ý§R°£.
+				Client.Name[name_length - 1] = 0; // Clear \n that cause by fgets().
 				name_length -= 1;
 				break;
 			}
@@ -140,60 +138,56 @@ public:
 
 	void ChatInput()
 	{
-		// ²á¤Ñ¥D°j°é
-
 		int  keyboard_state = 0, ch = 0;
 		int  buff_message_length = 0;
 		char buff_message[PACKET_BUFFER_MAX] = { 0 };
 
-#define BACKSPCAE_KEY_CODE  8  // Backspace­Ë°hÁä½X
-#define ENTER_KEY_CODE     13  // EnterÁä½X
+#define BACKSPCAE_KEY_CODE  8
+#define ENTER_KEY_CODE     13
 
 		printf("chat input... \n");
 
-
-		// ¨Ï¥Îwinsock«Dªý¶ë¼Ò¦¡¡A©Ò¥H¤£·|¥d¦b¬Y¨ç¦¡¤¤(¦p¡Gfgets, recv)¡A°j°é·|¤£Â_ªº°õ¦æ©MÀË¬dª¬ºA¡D
 		while (1)
 		{
-			keyboard_state = ::_kbhit(); // ÀË¬d¬O§_¦³Áä½L«ö¤U¡A­Y¦³¶Ç¦^1¡A­YµL¶Ç¦^0
+			keyboard_state = ::_kbhit(); // Check keyboard hit event.
 			if (keyboard_state > 0)
 			{
-				ch = ::_getch(); // ¨ú±o±qÁä½L«ö¤Uªº¤@­ÓÁä­È
+				ch = ::_getch(); // Get character
 				printf("%c", ch);
-				if (ch == ENTER_KEY_CODE) // ­Y«ö¤UEnterÁä...
+				if (ch == ENTER_KEY_CODE) // ­When hit enter
 				{
 					printf("\n");
-					if (::strcmp(buff_message, "exit") == 0) // ¤ñ¸û¦r¦ê¡I­Y¬° exit¡A«hµ²§ô¥»µ{¦¡
+					if (::strcmp(buff_message, "exit") == 0) // Trun down client itself
 						break;
 
 					if (buff_message_length > 0)
 					{
-						Send_C2S_Message(buff_message, buff_message_length);
-
+						//Send_C2S_Message(buff_message, buff_message_length);
+						Send_C2S_Message_2(buff_message, buff_message_length);
 						buff_message_length = 0;
-						::memset(buff_message, 0, PACKET_BUFFER_MAX); // §âbuff_message°O¾ÐÅé²M°£¬°0
+						::memset(buff_message, 0, PACKET_BUFFER_MAX);
 
-						Client.pAliveNode->StartTime = 0; // ¤ß¸õ¥]­«·s­p®É
+						Client.pAliveNode->StartTime = 0; // Heartbeattimer
 					}
 				}
-				else if (ch == BACKSPCAE_KEY_CODE) // ­Y«ö¤U­Ë°hÁä...
+				else if (ch == BACKSPCAE_KEY_CODE)
 				{
 					if (buff_message_length - 1 >= 0)
 						buff_message[--buff_message_length] = 0;
 				}
-				else // ¦s¤J²á¤Ñ°T®§...
+				else // Save messenge
 				{
 					if (buff_message_length + 1 < PACKET_BUFFER_MAX)
 						buff_message[buff_message_length++] = ch;
 				}
 			}
 
-			if (RecvEx(Client.Socket) == false) // recv¡]«Dªý¶ë¡^¡G·|¤£Â_¹Á¸Õ±µ¦¬serverºÝ¶Ç¨Óªº«Ê¥]
+			if (RecvEx(Client.Socket) == false) // recv(non-blocking)
 				break;
 
 			TaskManager->vRunTask();
 
-			::Sleep(1); // µ¥«Ý1²@¬í
+			::Sleep(1);
 		}
 	}
 	
@@ -205,7 +199,7 @@ public:
 		packet.PacketType = PACKET__C2S_ALIVE;
 		packet.PacketOrderNumber = ++Client.C2S_PacketOrderNumber;
 
-		SendEx(Client.Socket, (char*)&packet, packet.PacketLength); // send ¶Ç°e«Ê¥]
+		SendEx(Client.Socket, (char*)&packet, packet.PacketLength);
 	}
 	
 	void Send_C2S_Name(char* buff_name, UINT name_length)
@@ -217,7 +211,7 @@ public:
 		packet.PacketOrderNumber = ++Client.C2S_PacketOrderNumber;
 		::strcpy_s(packet.Name, NAME_BUFFER_MAX, buff_name);
 
-		SendEx(Client.Socket, (char*)&packet, packet.PacketLength); // send ¶Ç°e«Ê¥]
+		SendEx(Client.Socket, (char*)&packet, packet.PacketLength);
 	}
 
 	void Send_C2S_Message(char* buff_message, UINT buff_message_length)
@@ -229,7 +223,19 @@ public:
 		packet.PacketOrderNumber = ++Client.C2S_PacketOrderNumber;
 		::strcpy_s(packet.Message, MESSAGE_BUFFER_MAX, buff_message);
 
-		SendEx(Client.Socket, (char*)&packet, packet.PacketLength); // send ¶Ç°e«Ê¥]
+		SendEx(Client.Socket, (char*)&packet, packet.PacketLength);
+	}
+
+	void Send_C2S_Message_2(char* buff_message, UINT buff_message_length)
+	{
+		C2S_Message_2 packet = {};
+
+		packet.PacketLength = sizeof(HeadPacketInfo) + buff_message_length;
+		packet.PacketType = PACKET__C2S_MESSAGE_2;
+		packet.PacketOrderNumber = ++Client.C2S_PacketOrderNumber;
+		::strcpy_s(packet.Message, MESSAGE_BUFFER_MAX, buff_message);
+
+		SendEx(Client.Socket, (char*)&packet, packet.PacketLength);
 	}
 
 	bool SendEx(SOCKET socket, char* packet, WORD packet_length)
@@ -243,7 +249,6 @@ public:
 
 		while (send_packet_max > 0)
 		{
-			// ¶Ç°e«Ê¥]
 			send_length = ::send(socket, &packet[buff_packet_index], send_packet_max, 0);
 			if (send_length > 0)
 			{
@@ -253,7 +258,7 @@ public:
 			else
 			{
 				int error = ::WSAGetLastError();
-				if (error == WSAEWOULDBLOCK) // 10035
+				if (error == WSAEWOULDBLOCK) // 10035 - No package on buffer
 				{
 					if (++send_retry_count < send_retry_max)
 					{
@@ -261,7 +266,7 @@ public:
 						continue;
 					}
 					printf("send failed, WSAEWOULDBLOCK, send_retry_count full, socket= %d, error: %d\n", socket, error);
-					return false; // ¦¹socket¥i¯à¤w¸gµo¥Í¿ù»~.
+					return false;
 				}
 				printf("send failed, socket= %d, error: %d\n", socket, error);
 				return false;
@@ -281,7 +286,7 @@ public:
 
 		while (RecvPacketLength > 0)
 		{
-			// ±µ¦¬«Ê¥]¡G¨ú±o«Ê¥]ÀÉÀY-Á`ªø«×
+			// Receive packet : packet header and length
 			recv_length = ::recv(socket, &buffer[RecvPacketBufferIndex], RecvPacketLength, 0);
 			if (recv_length > 0)
 			{
@@ -296,9 +301,9 @@ public:
 			else
 			{
 				int error = ::WSAGetLastError();
-				if (error == WSAEWOULDBLOCK) // 10035 - recv½w½Ä°Ï¤º¨S¦³«Ê¥]¤F...
+				if (error == WSAEWOULDBLOCK) // 10035 - No package on buffer
 				{
-					return true; // ¦¹client¬O«Dªý¶ë¼Ò¦¡¡A©Ò¥H¹Á¸Õ±µ¦¬ÀÉÀY«o¨S¸ê®Æ®É¡A´N¥ß§Yªð¦^¡D
+					return true;			// No data need to be receive
 				}
 				printf("#1 recv failed, socket= %d, error: %d\n", socket, error);
 				return false;
@@ -309,7 +314,7 @@ public:
 
 		while (RecvPacketLength > 0)
 		{
-			// ±µ¦¬«Ê¥]¡G¨ú±o¤@­Ó§¹¾ãªº«Ê¥]¬°¤î
+			// Receive packet : receive until packet is completely.
 			recv_length = ::recv(socket, &buffer[RecvPacketBufferIndex], RecvPacketLength, 0);
 			if (recv_length > 0)
 			{
@@ -325,7 +330,7 @@ public:
 			else
 			{
 				int error = ::WSAGetLastError();
-				if (error == WSAEWOULDBLOCK) // 10035 - recv½w½Ä°Ï¤º¨S¦³«Ê¥]¤F...
+				if (error == WSAEWOULDBLOCK) // 10035 - No package on buffer
 				{
 					if (++recv_retry_count < recv_retry_max)
 					{
@@ -334,7 +339,7 @@ public:
 					}
 					printf("#2 recv failed, WSAEWOULDBLOCK, recv_retry_count full, socket= %d, error: %d\n", socket, error);
 					ClearRecvPacketInfo();
-					return false; // ¦¹socket¥i¯àµLªk¦A¦¬¨ì«Ê¥]¤F¡A·í§@¤w¸gÂ_½u.
+					return false; // Socket may dis connect.
 				}
 				printf("#2 recv failed, socket= %d, error: %d\n", socket, error);
 				ClearRecvPacketInfo();
@@ -351,6 +356,7 @@ public:
 
 		return true;
 	}
+
 	void ClearRecvPacketInfo()
 	{
 		RecvPacket = {};
@@ -360,8 +366,8 @@ public:
 
 	void Shutdown()
 	{
-		// shutdownÀu¶®ªºÃö³¬¤@­Ó³s±µ¡I·|µ¥«Ý¤@¤p¬q®É¶¡¡Aª½¨ì¨S¦³§ó¦h«Ê¥]­n¶Ç°e®É¡A¤~¤ÁÂ_³s±µ¡I
-		// SD_SEND¡G«ü©wsocket ±µ¤U¨Ó¤£¯à¦A©I¥s¶Ç°e«Ê¥]ªº¨ç¦¡¡C
+		// shutdown a socket producure.
+		// SD_SEND will be turn off
 		int result = ::shutdown(Client.Socket, SD_SEND);
 		if (result == SOCKET_ERROR)
 		{
@@ -369,15 +375,15 @@ public:
 			return;
 		}
 
-		::Sleep(100); // µ¥«Ý100²@¬í¡IÅý³Qshutdownªºclient¯à°÷¦³®É¶¡³B²zÂ÷½u°Ê§@¡I
+		::Sleep(100); // Wait let client can disconnect correctly.
 
 		char buff_message[PACKET_BUFFER_MAX] = { 0 };
 
-		// µ{¦¡µ²§ô«eªº°Ê§@¡G­Y¥¿½TÃö³¬«á¡Arecv·|¦^¶Ç0¡A§Y¥iÀu¶®ªºµ²§ôµ{¦¡¡D
-		// ­Y¦^¶Ç-1¡A¨Ã¥B¿ù»~½X¬OWSAEWOULDBLOCK®É¡A¤´¬OÀu¶®ªºµ²§ôµ{¦¡¡D
+		// Before ending receive length will be 0. Perfect shutdown.
+		// Or -1 WSAEWOULDBLOCK is also OK.
 		do
 		{
-			// recv¡]«Dªý¶ë¡^¡G·|¹Á¸Õ±µ¦¬serverºÝ¶Ç¨Óªº´Ý¦s«Ê¥]¥H¤ÎÂ÷½u½T»{«Ê¥]...(­Y¦³ªº¸Ü)
+			// recv for fragment packet and Disconnect Packet.
 			result = ::recv(Client.Socket, buff_message, PACKET_BUFFER_MAX, 0);
 			if (result > 0)
 				printf("final recv okay, recv_length: %d\n", result);
@@ -386,7 +392,7 @@ public:
 			else
 			{
 				int error = ::WSAGetLastError();
-				if (error == WSAEWOULDBLOCK) // 10035 ¨S¦³¥ô¦ó·s«Ê¥]®É...
+				if (error == WSAEWOULDBLOCK) // 10035 - No more package in buffer
 				{
 					printf("final recv notice, client connection closed. - WSAEWOULDBLOCK\n");
 				}
@@ -418,10 +424,10 @@ public:
 		Shutdown();
 
 		if (Client.Socket != INVALID_SOCKET)
-			::closesocket(Client.Socket); // Ãö³¬socket
+			::closesocket(Client.Socket);
 		Client.Socket = INVALID_SOCKET;
 
-		WSACleanup(); // ÄÀ©ñ winsock
+		WSACleanup();
 
 		MY_RELEASE(TaskManager);
 	}
@@ -430,9 +436,7 @@ public:
 	{
 		Logger::Create();
 
-		const UINT one_KB = 1024;
-		const UINT one_MB = (one_KB * 1024);
-		const UINT memory_pool_bytes_max = one_MB * 100;
+		const UINT memory_pool_bytes_max = 100 * MB;
 		MainMemoryPool::sMemoryPoolCreate(memory_pool_bytes_max);
 
 		if (Create())
