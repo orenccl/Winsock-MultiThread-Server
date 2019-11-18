@@ -70,7 +70,7 @@ class TCPServer
 
 	CAcceptThread		AcceptThread;
 	CThread				GameplayThread;                      
-	CThread				SendThread;                          
+	CThread				SendThread;                     
 	static UINT WINAPI sAcceptThreadProc(LPVOID param);
 	static UINT WINAPI sGameplayThreadProc(LPVOID param);
 	static UINT WINAPI sSendThreadProc(LPVOID param);

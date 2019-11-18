@@ -8,3 +8,5 @@ bin-int/Debug-windows-x86/MintServer/MintServer.vcxproj.FileListAbsolute.txt
 *.sarif
 bin-int/Debug-windows-x86/MintClient/MintClient.vcxproj.FileListAbsolute.txt
 *.pchast
+bin-int/
+MintUnityClient/

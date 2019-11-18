@@ -95,7 +95,7 @@ public:
 
 		// Set ConnectSocket non-blocking
 		// FIONBIO : Set or clear non-blocking mode
-		unsigned long non_blocking_mode = 1; // ­1 is set to on-blocking mode
+		unsigned long non_blocking_mode = 1; // ? is set to on-blocking mode
 		result = ::ioctlsocket(Client.Socket, FIONBIO, &non_blocking_mode);
 		if (result == SOCKET_ERROR)
 		{
