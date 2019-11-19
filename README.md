@@ -3,7 +3,12 @@
 ![](https://img.shields.io/github/license/orenccl/Winsock-Multi-Client-Server)  
 
 ## The Plan  
-Learn how to careat a Winsock-Multi-Client-Server by using windows API, and record how I learn it.  
+Learn how to careat a Winsock-Multi-Client-Server by using windows API, and record how I learn it.
+
+I learn most of it from  
+[The Brave](http://mmogc3d.blogspot.tw/2007/07/its-test.html)  
+[FaceBookPage](https://www.facebook.com/avatar996)  
+[FacebookGroup-The Brave's C++ Server Engine Community](https://www.facebook.com/groups/602569573901631/)
 
 ## Why using C++?  
 ### Pros  
