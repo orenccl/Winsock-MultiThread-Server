@@ -20,20 +20,20 @@ struct SocketInfo
 	SOCKET  Socket;
 	char    IP[LENGTH_16];
 };
+#define SOCKET_NODE  TDNode< SocketInfo >
 
-struct SocketContext
+struct SocketSendInfo
 {
 	SOCKET  Socket;
-	char    IP[LENGTH_16];
-	void*	pUserData;
+	WORD*	pS2C_PacketOrderNumber;
 };
-
-#define SOCKET_NODE  TDNode< SocketInfo >
+#define SOCKET_SEND_NODE  TDNode< SocketSendInfo >
 
 struct SocketCache
 {
-	UINT	SocketTableUseCount;
-	SOCKET	SocketTable[CONNECTION_MAX];
+	volatile LONG   FinishFlag;
+	UINT            SocketTableUseCount;
+	SocketSendInfo  SocketTable[CONNECTION_MAX];
 };
 
 struct TimerInfo
@@ -58,7 +58,7 @@ class TCPServer
 {
 	TMPDoublyLockList< SocketInfo >      AcceptList;		// When there is a new connection, Accept_InThread put it into AcceptList, List to be initialize in Select_InMainThread.
 	TMPDoublyList< SocketInfo >          SocketRecvList;    // Normal socket list ( For Select_InMainThread use )
-	TMPDoublyLockList< SocketInfo >      SocketSendList;    // Normal socket list ( For Select_InMainThread use )
+	TMPDoublyLockList< SocketSendInfo >  SocketSendList;    // Normal socket list ( For Select_InMainThread use )
 	SocketCache                          SocketSendCache;   // Socket cache table ( For Select_InMainThread use )
 	TMPSinglyLockList< RecvPacketInfo >  PacketRecvList;    // When received pocket, Select_InMainThread put it into PacketRecvList, List to be receive in Gameplay_InThread.
 	TMPSinglyLockList< SendPacketInfo >  PacketSendList;    // List to be send in Send_InThread.

@@ -282,11 +282,6 @@ void TCPServer::AcceptListCreateClientNode()
 		Tool::sMemcpy(socket_node->IP, LENGTH_16, accept_node->IP, LENGTH_16);
 		SocketRecvList.Link(socket_node);
 
-		socket_node = SocketSendList.LockGetNode();
-		socket_node->Socket = accept_node->Socket;
-		Tool::sMemcpy(socket_node->IP, LENGTH_16, accept_node->IP, LENGTH_16);
-		SocketSendList.LockLink(socket_node);
-
 		NoticeGameplayThreadCreateClientNode(accept_node);
 
 		AcceptList.LockUnlinkFreeNode(accept_node);
@@ -301,15 +296,15 @@ void TCPServer::RecvFreeClientNode(SOCKET_NODE*& del_socket_node)
 	SocketRecvList.FreeNode(del_socket_node);
 
 	SocketSendList.Locker.Lock();   // lock
-	SOCKET_NODE* socket_node = SocketSendList.pHeadNode, * del_node = NULL;
-	while (socket_node)
+	SOCKET_SEND_NODE* socket_send_node = SocketSendList.pHeadNode, * del_node = NULL;
+	while (socket_send_node)
 	{
-		if (socket_node->Socket == socket)
+		if (socket_send_node->Socket == socket)
 		{
-			del_node = socket_node;
+			del_node = socket_send_node;
 			break;
 		}
-		socket_node = socket_node->pNext;
+		socket_send_node = socket_send_node->pNext;
 	}
 
 	if (del_node)
@@ -323,14 +318,14 @@ void TCPServer::RecvFreeClientNode(SOCKET_NODE*& del_socket_node)
 	}
 	SocketSendList.Locker.Unlock(); // unlock
 
-	//---------------------------------------
-
 	NoticeGameplayThreadFreeClientNode(socket);
 }
 
 void TCPServer::CreateClientNode(RECV_PACKET_NODE* packet_node)
 {
 	SOCKET_CLIENT_NODE* client_node = ClientList.GetNode();
+
+	::memset(client_node, 0, sizeof(SOCKET_CLIENT_NODE));
 	client_node->Socket = packet_node->Socket;
 	Tool::sMemcpy(client_node->IP, LENGTH_16, packet_node->Packet, LENGTH_16);
 	ClientList.Link(client_node);
@@ -338,11 +333,18 @@ void TCPServer::CreateClientNode(RECV_PACKET_NODE* packet_node)
 	vUserCreateClientNode(client_node);
 
 	SetTCPNoDelay(client_node->Socket);
+
+	SOCKET_SEND_NODE* socket_send_node	= SocketSendList.LockGetNode();
+	socket_send_node->Socket			= client_node->Socket;
+	socket_send_node->pS2C_PacketOrderNumber = &(client_node->S2C_PacketOrderNumber);
+	SocketSendList.LockLink(socket_send_node);
 }
 
 void TCPServer::FreeClientNode(RECV_PACKET_NODE* packet_node)
 {
 	SOCKET_CLIENT_NODE* client_node = ClientList.pHeadNode, * del_client_node = NULL;
+	SOCKET_SEND_NODE* socket_send_node = SocketSendList.LockGetHeadNode(), * del_socket_send_node = NULL;;
+
 	while (client_node)
 	{
 		if (client_node->Socket == packet_node->Socket)
@@ -353,6 +355,17 @@ void TCPServer::FreeClientNode(RECV_PACKET_NODE* packet_node)
 		client_node = client_node->pNext;
 	}
 
+	while (socket_send_node)
+	{
+		if (socket_send_node->Socket == packet_node->Socket)
+		{
+			del_socket_send_node = socket_send_node;
+			break;
+		}
+		socket_send_node = socket_send_node->pNext;
+	}
+
+
 	D_CHECK(del_client_node);
 
 	vUserFreeClientNode(del_client_node);
@@ -362,10 +375,9 @@ void TCPServer::FreeClientNode(RECV_PACKET_NODE* packet_node)
 		CloseSocket(del_client_node->Socket); // Close client socket
 	}
 
+	SocketSendList.LockUnlinkFreeNode(del_socket_send_node);
 	ClientList.Unlink(del_client_node);
 	ClientList.FreeNode(del_client_node);
-
-	::InterlockedExchange(&SocketSendCache.SocketTableUseCount, 0);
 }
 
 void TCPServer::NoticeGameplayThreadCreateClientNode(SOCKET_NODE* accept_node)
@@ -606,9 +618,10 @@ void TCPServer::CheckClientAlive()
 
 void TCPServer::Send_InThread()
 {
-	SEND_PACKET_NODE* packet_node = NULL;
-	SOCKET_NODE* socket_node = NULL;
-	PacketBuffer* packet = NULL;
+	SEND_PACKET_NODE*	packet_node = NULL;
+	SOCKET_SEND_NODE*	socket_send_node = NULL;
+	SocketSendInfo*		socket_client = NULL;
+	HeadPacketInfo*		head_packet = NULL;
 
 	while (RunFlag)
 	{
@@ -620,14 +633,19 @@ void TCPServer::Send_InThread()
 				// Optimize：Put socket list into socket cache table lower down lock competition
 				SocketSendList.Locker.Lock();   // lock
 				SocketSendCache.SocketTableUseCount = 0;
-				socket_node = SocketSendList.pHeadNode;
-				while (socket_node)
+				socket_send_node = SocketSendList.pHeadNode;
+				while (socket_send_node)
 				{
-					SocketSendCache.SocketTable[SocketSendCache.SocketTableUseCount++] = socket_node->Socket;
-					socket_node = socket_node->pNext;
+					socket_client = &SocketSendCache.SocketTable[SocketSendCache.SocketTableUseCount];
+					socket_client->Socket					= socket_send_node->Socket;
+					socket_client->pS2C_PacketOrderNumber	= socket_send_node->pS2C_PacketOrderNumber;
+					++SocketSendCache.SocketTableUseCount;
+					socket_send_node = socket_send_node->pNext;
 				}
 				SocketSendList.Locker.Unlock(); // unlock
 			}
+
+			head_packet = (HeadPacketInfo*)packet_node->Packet;
 
 			switch (packet_node->SendType)
 			{
@@ -636,10 +654,10 @@ void TCPServer::Send_InThread()
 					const int max = SocketSendCache.SocketTableUseCount;
 					for (int i = 0; i < max; ++i)
 					{
-						packet = (PacketBuffer*)packet_node->Packet;
-						packet->PacketOrderNumber = ++(GetSocketClientNode(SocketSendCache.SocketTable[i])->S2C_PacketOrderNumber);
-						Tool::sMemcpy(packet_node->Packet, PACKET_BUFFER_MAX, packet, packet->PacketLength);
-						SendEx(SocketSendCache.SocketTable[i], packet_node->Packet, packet_node->PacketLength);
+						socket_client = &SocketSendCache.SocketTable[i];
+			
+						head_packet->PacketOrderNumber = ++(*socket_client->pS2C_PacketOrderNumber);
+						SendEx(socket_client->Socket, packet_node->Packet, packet_node->PacketLength);
 					}
 					break;
 				}
@@ -652,12 +670,12 @@ void TCPServer::Send_InThread()
 					const int max = SocketSendCache.SocketTableUseCount;
 					for (int i = 0; i < max; ++i)
 					{
-						if (packet_node->Socket == SocketSendCache.SocketTable[i])
+						if (packet_node->Socket == (SocketSendCache.SocketTable[i]).Socket)
 							continue;
-						packet = (PacketBuffer*)packet_node->Packet;
-						packet->PacketOrderNumber = ++(GetSocketClientNode(SocketSendCache.SocketTable[i])->S2C_PacketOrderNumber);
-						Tool::sMemcpy(packet_node->Packet, PACKET_BUFFER_MAX, packet, packet->PacketLength);
-						SendEx(SocketSendCache.SocketTable[i], packet_node->Packet, packet_node->PacketLength);
+						socket_client = &SocketSendCache.SocketTable[i];
+
+						head_packet->PacketOrderNumber = ++(*socket_client->pS2C_PacketOrderNumber);
+						SendEx(socket_client->Socket, packet_node->Packet, packet_node->PacketLength);
 					}
 					break;
 				}
@@ -685,10 +703,10 @@ void TCPServer::Send_InThread()
 
 void TCPServer::AddSendList(_SEND_TYPE_ send_type, SOCKET_CLIENT_NODE* client_node, HeadPacketInfo* packet)
 {
-	SEND_PACKET_NODE* send_packet_node = PacketSendList.LockGetNode();
-	send_packet_node->SendType = send_type;
-	send_packet_node->Socket = client_node->Socket;
-	send_packet_node->PacketLength = packet->PacketLength;
+	SEND_PACKET_NODE* send_packet_node	= PacketSendList.LockGetNode();
+	send_packet_node->SendType			= send_type;
+	send_packet_node->Socket			= client_node->Socket;
+	send_packet_node->PacketLength		= packet->PacketLength;
 	Tool::sMemcpy(send_packet_node->Packet, PACKET_BUFFER_MAX, packet, packet->PacketLength);
 	PacketSendList.LockLink(send_packet_node);
 	SendThread.Awake(); // Awake SendThreadProc
