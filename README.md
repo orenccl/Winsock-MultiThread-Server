@@ -1,6 +1,5 @@
 # MintServer
 ###### tags: `C++` `Winsock` `Multi-Client Server`  
-![](https://img.shields.io/github/license/orenccl/Winsock-Multi-Client-Server)  
 
 ## The Plan  
 Learn how to careat a Winsock-Multi-Client-Server by using windows API, and record how I learn it.
